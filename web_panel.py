@@ -18,8 +18,8 @@ from yarl import URL
 
 from astrbot.api import logger
 
-from .config import ConfigError, integer, string, validate_config
-from .client import PandaScoreClient
+from .config import ConfigError, SOURCE_DEFAULTS, integer, source_id, sources_configured, string, validate_config
+from .data_sources import SourceRouter
 from .delivery import DeliveryError
 
 CST = timezone(timedelta(hours=8))
@@ -160,12 +160,15 @@ class WebPanel:
         a.add_get("/",                          self.index)
         a.add_get("/app.js",                    self.asset)
         a.add_get("/setup.js",                  self.asset)
+        a.add_get("/source-ui.js",              self.asset)
         a.add_get("/style.css",                 self.asset)
         a.add_get("/api/config",                self.get_config)
         a.add_patch("/api/config",              self.patch_config)
         a.add_get("/api/config/export",         self.export_config)
         a.add_post("/api/config/import",        self.import_config)
         a.add_post("/api/setup/check",          self.check_setup)
+        a.add_post("/api/sources/check",        self.check_sources)
+        a.add_post("/api/sources/verify",       self.verify_source)
         a.add_get("/api/matches",               self.get_matches)
         a.add_post("/api/refresh",              self.refresh)
         a.add_post("/api/push_now",             self.push_now)
@@ -209,8 +212,12 @@ class WebPanel:
 
     async def get_config(self, req):
         data = self.plugin.store.export_all()
+        data["followed_teams"] = self.plugin.client.followed_teams_for_panel()
         return self._json({"ok": True, "data": data,
                            "token_configured": bool(self.plugin.store.get("pandascore_token")),
+                           "proxy_configured": bool(self.plugin.store.get("hltv_proxy_url")),
+                           "source_configured": sources_configured(self.plugin._source_config()),
+                           "source_status": self.plugin.client.status(),
                            "team_logos": getattr(getattr(self.plugin, "team_logos", None), "web_images", {}),
                            "team_logo_dark_names": getattr(getattr(self.plugin, "team_logos", None), "web_dark_names", []),
                            "web_token_configured": bool(self.plugin.store.get("web_panel_token")),
@@ -234,70 +241,56 @@ class WebPanel:
             web_changed = changed & {"web_panel_host", "web_panel_port", "web_panel_enabled"}
             self.plugin.store.import_config(body)
             web_reconfigured = False
-            if web_changed:
-                try:
+            try:
+                if web_changed:
                     web_reconfigured = await self.plugin.apply_web_panel_config()
-                except Exception as exc:
-                    # A failed bind leaves the previous listener intact. Keep the
-                    # saved settings consistent with it before reporting failure.
-                    self.plugin.store.import_config(previous)
-                    logger.error(f"[CS] Web 面板配置应用失败: {exc}")
-                    return self._json({"ok": False, "msg": f"web panel reconfigure failed: {exc}"}, 500)
-            if changed:
-                await self.plugin.reload_runtime_config()
+                if changed:
+                    await self.plugin.reload_runtime_config()
+            except Exception as exc:
+                self.plugin.store.import_config(previous)
+                rollback_ok = True
+                try:
+                    if web_changed:
+                        await self.plugin.apply_web_panel_config()
+                    await self.plugin.reload_runtime_config()
+                except Exception as rollback_error:
+                    rollback_ok = False
+                    logger.error(f"[CS] 运行配置恢复失败: {type(rollback_error).__name__}")
+                logger.error(f"[CS] 配置应用失败: {type(exc).__name__}")
+                return self._json({"ok": False, "msg": "配置应用失败，已恢复保存值" if rollback_ok else
+                                   "配置应用失败，保存值已恢复，但运行状态需要检查或重载插件"}, 500)
             filters = {
                 "min_tiers", "blacklist_teams", "blacklist_leagues",
-                "notify_all_followed", "followed_teams",
+                "notify_all_followed", "followed_teams", "hltv_min_stars",
             }
             if changed & (filters | {"remind_minutes", "custom_remind_minutes"}):
                 self.plugin.rebuild_all_match_tasks()
-            elif imported or changed & {"pandascore_token", "fetch_ahead_days"}:
+            elif imported or changed & {"pandascore_token", "fetch_ahead_days", *SOURCE_DEFAULTS}:
                 self.plugin.schedule_refresh("web_import_config" if imported else "web_patch_config")
-            if changed & (filters | {"tournament_announce_enabled", "tournament_announce_hours"}):
+            if changed & (filters | {"tournament_announce_enabled", "tournament_announce_hours", *SOURCE_DEFAULTS}):
                 self.plugin.rebuild_tournament_tasks()
         return self._json({"ok": True, "restart_required": False, "web_reconfigured": web_reconfigured})
 
     async def get_matches(self, req):
-        return self._json({"ok": True, "matches": self.plugin.get_panel_matches()})
+        return self._json({"ok": True, "matches": self.plugin.get_panel_matches(),
+                           "source_status": self.plugin.client.status()})
 
     async def check_setup(self, req):
-        """Check candidate/saved PandaScore credentials without changing config."""
+        """Check candidate source settings without changing saved configuration."""
         body = await self._body(req, allow_empty=True)
-        candidate = body.get("pandascore_token")
-        if candidate is not None and not isinstance(candidate, str):
-            raise ConfigError("pandascore_token 必须是字符串")
-        token = candidate.strip() if isinstance(candidate, str) and candidate.strip() else ""
-        source = {"ok": False, "message": "请填写 PandaScore Token，或先在插件配置中保存 Token。"}
-        if not token:
-            token = str(self.plugin.store.get("pandascore_token") or "").strip()
-
-        if token:
-            client = PandaScoreClient(token)
-            try:
-                matches = await asyncio.wait_for(
-                    client.get_upcoming_matches(per_page=1), timeout=15,
-                )
-                if matches is None:
-                    source = {
-                        "ok": False,
-                        "message": "PandaScore 验证失败，请检查 Token 是否有效及服务器网络是否可访问。",
-                    }
-                else:
-                    source = {"ok": True, "message": "PandaScore 连接正常。"}
-            except asyncio.TimeoutError:
-                source = {
-                    "ok": False,
-                    "message": "PandaScore 请求超时，请检查服务器网络后重试。",
-                }
-            except Exception:
-                # Do not expose exception text: request/client errors can include
-                # URLs or other details, and candidate tokens must stay private.
-                source = {
-                    "ok": False,
-                    "message": "PandaScore 检查失败，请检查 Token 和服务器网络后重试。",
-                }
-            finally:
-                await client.close()
+        candidate = validate_config(body)
+        if not candidate.get("pandascore_token"):
+            candidate.pop("pandascore_token", None)
+        settings = {**self.plugin._source_config(), **candidate}
+        client = SourceRouter(settings, self.plugin.store)
+        try:
+            statuses = await client.check_sources()
+        finally:
+            await client.close()
+        enabled = [item for item in statuses.values() if item["enabled"]]
+        ready = sum(item["state"] == "ready" for item in enabled)
+        source = {"ok": bool(enabled) and ready == len(enabled), "message": "数据源连接正常" if ready == len(enabled)
+                  else "部分数据源可用，请检查受阻来源" if ready else "数据源检查未通过，请查看各来源状态"}
 
         groups = self.plugin.store.get("push_groups")
         group_count = len(groups) if isinstance(groups, (list, tuple)) else 0
@@ -314,9 +307,29 @@ class WebPanel:
         return self._json({
             "ok": True,
             "source": source,
+            "sources": statuses,
             "groups": group_status,
             "platform": platform_status,
         })
+
+    async def check_sources(self, req):
+        statuses = await self.plugin.client.check_sources()
+        enabled = [item for item in statuses.values() if item["enabled"]]
+        ready = sum(item["state"] == "ready" for item in enabled)
+        return self._json({"ok": True, "sources": statuses,
+                           "source": {"ok": bool(enabled) and ready == len(enabled), "message": "数据源连接正常" if ready == len(enabled)
+                                      else "部分来源受阻" if ready else "数据源检查未通过"}})
+
+    async def verify_source(self, req):
+        if "hltv" not in self.plugin.client.enabled:
+            return self._json({"ok": False, "msg": "请先在高级维护启用并保存 HLTV 数据源"}, 400)
+        task = self.plugin._verification_task
+        if task is not None and not task.done():
+            return self._json({"ok": True, "started": True, "msg": "人工验证已经在等待，请在浏览器中完成"})
+        self.plugin._verification_task = self.plugin._create_background_task(
+            self.plugin.client.manual_verify(), "hltv_manual_verify")
+        return self._json({"ok": True, "started": True,
+                           "msg": "已启动人工验证；请在运行插件的机器上查看浏览器，完成后检查数据源状态。无桌面时需预先配置私有显示与 SSH 隧道。"})
 
     async def refresh(self, req):
         self.plugin.schedule_refresh("web_refresh")
@@ -361,7 +374,7 @@ class WebPanel:
     async def add_team(self, req):
         """通过精确 ID 关注战队"""
         body = await self._body(req)
-        team_id = integer(body.get("id"), "team id", 1)
+        team_id = source_id(body.get("id"), "team id")
         name = string(body.get("name"), "team name", nonempty=True)
         slug = string("" if body.get("slug") is None else body["slug"], "team slug")
         image_url = string(body.get("image_url") or "", "team image URL")
@@ -379,7 +392,7 @@ class WebPanel:
         if req.method == "POST":
             body = await self._body(req)
             if body.get("id") is not None:
-                team_id = integer(body["id"], "team id", 1)
+                team_id = source_id(body["id"], "team id")
             else:
                 name = string(body.get("name"), "team name", nonempty=True)
 
@@ -408,7 +421,8 @@ class WebPanel:
         teams = [
             {"id": t.get("id"), "name": t.get("name"), "slug": t.get("slug"),
              "image_url": t.get("image_url"), "is_main": bool(t.get("is_main")),
-             "matched_alias": t.get("matched_alias", ""), "match_kind": t.get("match_kind", "")}
+             "matched_alias": t.get("matched_alias", ""), "match_kind": t.get("match_kind", ""),
+             "_source": t.get("_source", "pandascore")}
             for t in results if t.get("id") and t.get("name")
         ]
         # 标记已关注
@@ -437,7 +451,7 @@ class WebPanel:
 
     async def patch_match(self, req):
         """修改单场比赛的自定义提醒时间"""
-        mid = integer(req.match_info.get("mid", ""), "match id", 1)
+        mid = source_id(req.match_info.get("mid", ""), "match id")
         body = await self._body(req)
 
         if "remind_minutes" not in body:
@@ -451,7 +465,7 @@ class WebPanel:
 
     async def rebuild_match(self, req):
         """手动重建单场比赛的提醒任务（同时取消正在进行的结果轮询）"""
-        mid = integer(req.match_info.get("mid", ""), "match id", 1)
+        mid = source_id(req.match_info.get("mid", ""), "match id")
 
         msg = self.plugin.rebuild_match_task(mid)
         if msg is None:

@@ -1,4 +1,8 @@
 import { createSetupGuide } from './setup.js';
+import {
+  SOURCE_DEFAULTS, buildSourcePayload, isSourceConfigured, matchPath,
+  matchTierLabel, renderFollowSourceBadges, renderSourceBadges, renderSourceStatus, sameSourceId, sourceCheckRows, sourceControls, sourceStatusFromMatches,
+} from './source-ui.js';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const bridge = window.AstrBotPluginView || window.AstrBotPluginPage;
@@ -12,6 +16,9 @@ const state = {
   dirty: new Set(),
   pending: new Set(),
   tokenConfigured: false,
+  sourceConfigured: false,
+  sourceStatus: {},
+  proxyConfigured: false,
   teamLogos: {},
   teamLogoDarkNames: new Set(),
   popularTeams: [],
@@ -19,7 +26,7 @@ const state = {
   popularLoading: false,
   popularAttempted: false,
 };
-const secretKeys = new Set(["pandascore_token", "web_panel_token"]);
+const secretKeys = new Set(["pandascore_token", "web_panel_token", "hltv_proxy_url"]);
 const escaped = (value) =>
   String(value ?? "").replace(
     /[&<>"']/g,
@@ -73,7 +80,10 @@ async function api(path, method = "GET", body, query = {}) {
     if (!response.ok)
       throw new Error(result.msg || result.message || "请求失败，请稍后重试。");
   }
-  if (!result || result.ok === false)
+  const sourceCheck = method === "POST" &&
+    ["/api/setup/check", "/api/sources/check"].includes(path) &&
+    (result?.source || result?.sources);
+  if (!result || (result.ok === false && !sourceCheck))
     throw new Error(result?.msg || result?.message || "操作未完成。");
   return result;
 }
@@ -225,14 +235,33 @@ function fillForm(section) {
     button.setAttribute("aria-pressed", "false");
   });
   if (section === "push") renderStreams(state.config.custom_streams || []);
+  if (section === "advanced") syncSourceControls();
 }
 
-async function loadConfig() {
-  const result = await api("/api/config");
-  state.config = result.data;
-  state.teamLogos = result.team_logos || {};
-  state.teamLogoDarkNames = new Set(result.team_logo_dark_names || []);
+function syncSourceControls() {
+  const form = $("#advanced-form");
+  const controls = sourceControls($('[data-key="data_source_mode"]', form).value);
+  $("[data-source-primary]", form).hidden = !controls.primary;
+  $$("[data-source-provider]", form).forEach((fields) => {
+    fields.hidden = !controls[fields.dataset.sourceProvider];
+    fields.disabled = fields.hidden;
+  });
+}
+
+function renderSourceHealth() {
+  $("#source-status").innerHTML = renderSourceStatus(
+    state.config, state.sourceStatus, state.sourceConfigured,
+  );
+  const hltv = sourceControls(state.config.data_source_mode).hltv;
+  $("#verify-hltv").hidden = !hltv;
+  $("#source-verification").hidden = !hltv;
+}
+
+function updateSourceMetadata(result) {
   state.tokenConfigured = !!result.token_configured;
+  state.sourceConfigured = isSourceConfigured(result);
+  state.sourceStatus = result.source_status || {};
+  state.proxyConfigured = result.proxy_configured === true;
   $("#pandascore-secret-hint").textContent = state.tokenConfigured
     ? "已配置。留空保留原 Token；输入新值可替换。"
     : "尚未配置，请输入 PandaScore Token。";
@@ -240,7 +269,35 @@ async function loadConfig() {
     result.web_token_configured === false
       ? "尚未配置管理令牌。"
       : "管理令牌不在页面回显。留空保留原令牌。";
-  $("#setup-notice").hidden = state.tokenConfigured;
+  $("#setup-notice").hidden = state.sourceConfigured;
+  $("#hltv-proxy-hint").textContent = state.proxyConfigured
+    ? "已保存代理地址，不在页面回显。留空保留，输入新值可替换；勾选下方选项才会清除。"
+    : "尚未配置代理。不需要代理时可留空；含认证信息的地址不会回显。";
+  $("#source-health-error").hidden = true;
+  renderSourceHealth();
+}
+
+async function loadSourceHealth() {
+  const config = state.config;
+  const result = await api("/api/config");
+  if (config !== state.config) return;
+  updateSourceMetadata(result);
+  if (result.data?.followed_teams) {
+    state.config.followed_teams = result.data.followed_teams;
+    renderSubscriptions();
+    syncTeamFollowedState();
+  }
+  setupGuide?.sync();
+}
+
+async function loadConfig() {
+  const result = await api("/api/config");
+  state.config = { ...SOURCE_DEFAULTS, ...result.data };
+  secretKeys.forEach((key) => delete state.config[key]);
+  state.teamLogos = result.team_logos || {};
+  state.teamLogoDarkNames = new Set(result.team_logo_dark_names || []);
+  updateSourceMetadata(result);
+  $("#source-checks").hidden = true;
   for (const section of ["subscriptions", "push", "advanced"])
     if (!state.dirty.has(section)) fillForm(section);
   renderSubscriptions();
@@ -253,7 +310,8 @@ async function loadConfig() {
 async function saveSection(section, button) {
   const form = $(`#${section}-form`);
   if (!form.reportValidity()) return;
-  const values = formValues(section);
+  let values = formValues(section);
+  if (section === "advanced") values = { ...values, ...buildSourcePayload(values) };
   if (values.daily_push_enabled && !values.daily_push_times.length)
     throw new Error("每日推送开启时，请至少填写一个推送时间。");
   if (
@@ -273,6 +331,7 @@ async function saveSection(section, button) {
     await api("/api/config", "PATCH", values);
     state.dirty.delete(section);
     await loadConfig();
+    if (section === "advanced") await loadMatches();
     toast("设置已保存并生效。");
   } finally {
     inputs.forEach((input, index) => {
@@ -306,7 +365,7 @@ function teamAvatar(team, name = team?.name || "TBD") {
   const known = candidates.find(
     (item) =>
       item.image_url &&
-      ((team?.id && item.id === team.id) || item.name === name),
+      ((team?.id && sameSourceId(item.id, team.id)) || item.name === name),
   );
   const key = String(name).toLowerCase().replace(/[^a-z0-9]/g, "");
   const official = state.teamLogos[key];
@@ -322,7 +381,7 @@ function isTeamFollowed(candidate) {
     typeof item === "string"
       ? item.toLowerCase() === String(candidate.name || "").toLowerCase()
       : item.id
-        ? String(item.id) === String(candidate.id)
+        ? sameSourceId(item.id, candidate.id)
         : String(item.name || "").toLowerCase() ===
           String(candidate.name || "").toLowerCase(),
   );
@@ -360,7 +419,7 @@ function teamMatchNote(team) {
 function renderTeamSearchResults() {
   const container = $("#team-search-results");
   if (container.hidden || !state.searchResultsReady) return;
-  container.innerHTML = `<div class="search-results"><div class="search-caption">搜索结果 · ${state.teams.length} 支战队</div>${state.teams.length ? state.teams.map((team, index) => `<div class="item-row"><div class="item-name">${teamAvatar(team)}<div><strong>${escaped(team.name)}${team.is_main ? '<span class="team-main-badge">主队</span>' : ""}</strong><small>${teamMatchNote(team)}</small></div></div><button class="button ${team.followed ? "ghost" : "primary"}" type="button" data-team-follow="${index}" data-team-source="search" ${team.followed ? "disabled" : ""}>${team.followed ? "已关注" : "关注"}</button></div>`).join("") : '<div class="empty compact">没有找到战队，试试其他名称。</div>'}</div>`;
+  container.innerHTML = `<div class="search-results"><div class="search-caption">搜索结果 · ${state.teams.length} 支战队</div>${state.teams.length ? state.teams.map((team, index) => `<div class="item-row"><div class="item-name">${teamAvatar(team)}<div><strong>${escaped(team.name)}${team.is_main ? '<span class="team-main-badge">主队</span>' : ""}</strong><small>${teamMatchNote(team)}</small><span class="source-badges">${renderSourceBadges(team)}</span></div></div><button class="button ${team.followed ? "ghost" : "primary"}" type="button" data-team-follow="${index}" data-team-source="search" ${team.followed ? "disabled" : ""}>${team.followed ? "已关注" : "关注"}</button></div>`).join("") : '<div class="empty compact">没有找到战队，试试其他名称。</div>'}</div>`;
 }
 
 function renderPopularTeams() {
@@ -414,6 +473,7 @@ function matchTeam(match, index) {
   return `<span class="match-team">${teamAvatar(team, name)}<span>${escaped(name)}</span></span>`;
 }
 function isFollowed(match) {
+  if ((match.opponents || []).some((opponent) => opponent.opponent?._followed === true)) return true;
   const ids = match.opponents?.map((opponent) => opponent.opponent?.id) || [];
   const names = [teamName(match, 0), teamName(match, 1)].map((name) =>
     name.toLowerCase(),
@@ -422,7 +482,7 @@ function isFollowed(match) {
     typeof team === "string"
       ? names.some((name) => name.includes(team.toLowerCase()))
       : team.id
-        ? ids.includes(team.id)
+        ? ids.some((id) => sameSourceId(id, team.id))
         : names.includes(String(team.name || "").toLowerCase()),
   );
 }
@@ -473,12 +533,12 @@ function renderMatches() {
     `${matches.length} 场比赛${matches.length === state.matches.length ? "" : ` / 共 ${state.matches.length} 场`}`;
   if (!matches.length) {
     $("#match-list").innerHTML =
-      `<div class="empty"><strong>${state.matches.length ? "没有匹配的比赛" : "暂无比赛安排"}</strong><p>${state.matches.length ? "试试其他关键词或筛选条件。" : state.tokenConfigured ? "可获取最新赛程，或调整订阅中的赛事筛选。" : "配置数据源后，在这里查看比赛安排。"}</p></div>`;
+      `<div class="empty"><strong>${state.matches.length ? "没有匹配的比赛" : "暂无比赛安排"}</strong><p>${state.matches.length ? "试试其他关键词或筛选条件。" : state.sourceConfigured ? "可获取最新赛程，或调整订阅中的赛事筛选。" : "配置数据源后，在这里查看比赛安排。"}</p></div>`;
     return;
   }
   $("#match-list").innerHTML = matches
     .map((match) => {
-      const mid = Number(match.id);
+      const mid = escaped(match.id);
       const [date, time] = dateText(match.scheduled_at || match.begin_at);
       const kind = matchCategory(match);
       const status =
@@ -487,12 +547,14 @@ function renderMatches() {
           : kind === "live"
             ? "等待赛果"
             : "待开赛";
-      const tier = String(match.tournament?.tier || "unranked").toUpperCase();
+      const tierLabel = matchTierLabel(match);
+      const hltv = match._source ? match._source === "hltv" : String(match.id).startsWith("hltv:");
+      const formatLabel = match.number_of_games ? `BO${match.number_of_games}` : hltv ? "赛制未知" : "BO1";
       const custom = match._custom_remind != null;
       const minutes = Number(
         match._remind_min ?? state.config.remind_minutes ?? 10,
       );
-      return `<article class="match-row"><div class="match-time"><strong>${escaped(date)}</strong><small>${escaped(time)}${time ? " 北京时间" : ""}</small></div><div class="match-body"><div class="match-title">${matchTeam(match, 0)}<span class="versus">vs</span>${matchTeam(match, 1)}${isFollowed(match) ? '<span class="follow-indicator">已关注</span>' : ""}</div><div class="match-subtitle"><span>${escaped(match.league?.name || "未知赛事")}</span><span>·</span><span>${escaped(tier === "UNRANKED" ? "未定级" : `${tier} 级`)}</span><span>·</span><span>BO${escaped(match.number_of_games || 1)}</span>${kind === "upcoming" ? `<span>·</span><span>提前 ${minutes} 分钟${custom ? " · 自定义" : ""}</span>` : ""}</div>${match._task_status === "polling_result" ? `<div class="match-note">正在查询赛果${match._attempt != null ? ` · 已查询 ${escaped(match._attempt)} 次` : ""}</div>` : ""}${[teamName(match, 0), teamName(match, 1)].includes("TBD") ? '<div class="match-note">参赛队伍待确认，确认后自动调整提醒。</div>' : ""}</div><div class="match-side"><span class="badge ${kind === "finished" ? "green" : kind === "live" ? "blue" : ""}">${status}</span><details class="match-actions"><summary aria-label="比赛操作">⋯</summary><div>${kind === "upcoming" ? `<button type="button" data-match-edit="${mid}">调整提醒时间</button>` : ""}<button type="button" data-match-rebuild="${mid}">重建比赛任务</button></div></details></div></article>`;
+      return `<article class="match-row"><div class="match-time"><strong>${escaped(date)}</strong><small>${escaped(time)}${time ? " 北京时间" : ""}</small></div><div class="match-body"><div class="match-title">${matchTeam(match, 0)}<span class="versus">vs</span>${matchTeam(match, 1)}${isFollowed(match) ? '<span class="follow-indicator">已关注</span>' : ""}</div><div class="match-subtitle"><span>${escaped(match.league?.name || "未知赛事")}</span><span>·</span><span>${tierLabel}</span><span>·</span><span>${escaped(formatLabel)}</span>${kind === "upcoming" ? `<span>·</span><span>提前 ${minutes} 分钟${custom ? " · 自定义" : ""}</span>` : ""}</div><div class="match-subtitle source-badges">${renderSourceBadges(match)}</div>${match._task_status === "polling_result" ? `<div class="match-note">正在查询赛果${match._attempt != null ? ` · 已查询 ${escaped(match._attempt)} 次` : ""}</div>` : ""}${[teamName(match, 0), teamName(match, 1)].includes("TBD") ? '<div class="match-note">参赛队伍待确认，确认后自动调整提醒。</div>' : ""}</div><div class="match-side"><span class="badge ${kind === "finished" ? "green" : kind === "live" ? "blue" : ""}">${status}</span><details class="match-actions"><summary aria-label="比赛操作">⋯</summary><div>${kind === "upcoming" ? `<button type="button" data-match-edit="${mid}">调整提醒时间</button>` : ""}<button type="button" data-match-rebuild="${mid}">重建比赛任务</button></div></details></div></article>`;
     })
     .join("");
 }
@@ -501,6 +563,8 @@ async function loadMatches({ quiet = false } = {}) {
   try {
     const result = await api("/api/matches");
     state.matches = result.matches || [];
+    state.sourceStatus = sourceStatusFromMatches(result, state.sourceStatus);
+    if (result.source_status) renderSourceHealth();
     renderStats();
     renderMatches();
     $("#matches-updated").textContent =
@@ -535,7 +599,7 @@ function renderSubscriptions() {
     ? teams
         .map((team, index) => {
           const name = typeof team === "string" ? team : team.name;
-          return `<div class="item-row"><div class="item-name">${teamAvatar(typeof team === "object" ? team : {}, name)}<div><strong>${escaped(name)}</strong><small>${typeof team === "object" && team.id ? `ID ${escaped(team.id)}` : "按名称关注"}</small></div></div><button type="button" class="button ghost" data-team-remove="${index}" aria-label="取消关注 ${escaped(name)}">取消关注</button></div>`;
+          return `<div class="item-row"><div class="item-name">${teamAvatar(typeof team === "object" ? team : {}, name)}<div><strong>${escaped(name)}</strong><small>${typeof team === "object" && team.id ? `ID ${escaped(team.id)}` : "按名称关注"}</small>${typeof team === "object" ? `<span class="source-badges">${renderFollowSourceBadges(team)}</span>` : ""}</div></div><button type="button" class="button ghost" data-team-remove="${index}" aria-label="取消关注 ${escaped(name)}">取消关注</button></div>`;
         })
         .join("")
     : '<div class="empty compact">还没有关注战队，搜索战队开始关注。</div>';
@@ -620,6 +684,8 @@ function installEvents() {
     activateTab(tabs[next].dataset.tab, { focus: true });
   });
   $$("form[data-section]").forEach((form) => {
+    if (form.dataset.section === "advanced")
+      $('[data-key="data_source_mode"]', form).addEventListener("change", syncSourceControls);
     form.addEventListener("input", () => checkDirty(form.dataset.section));
     form.addEventListener("change", () => checkDirty(form.dataset.section));
     form.addEventListener("submit", (event) => {
@@ -687,7 +753,7 @@ function installEvents() {
       } catch (error) {
         if (sequence !== searchSequence) return;
         container.innerHTML =
-          '<div class="empty compact">搜索失败，请检查 Token 或稍后重试。</div>';
+          '<div class="empty compact">搜索失败，请检查已启用的数据源或稍后重试。</div>';
         throw error;
       }
     });
@@ -763,7 +829,7 @@ function installEvents() {
       checkDirty("push");
     }
     if (button.hasAttribute("data-match-edit"))
-      run(button, () => editMatch(Number(button.dataset.matchEdit)));
+      run(button, () => editMatch(button.dataset.matchEdit));
     if (button.hasAttribute("data-match-rebuild"))
       run(button, async () => {
         button.closest("details").open = false;
@@ -776,7 +842,7 @@ function installEvents() {
         )
           return;
         await api(
-          `/api/matches/${button.dataset.matchRebuild}/rebuild`,
+          `${matchPath(button.dataset.matchRebuild)}/rebuild`,
           "POST",
           {},
         );
@@ -841,6 +907,38 @@ function installEvents() {
   $("#refresh-logs").addEventListener("click", (event) =>
     run(event.currentTarget, loadLogs),
   );
+  $("#check-sources").addEventListener("click", (event) =>
+    run(event.currentTarget, async () => {
+      if (state.dirty.has("advanced")) throw new Error("请先保存或放弃连接设置的修改，再检查数据源。");
+      const result = await api("/api/sources/check", "POST", {});
+      await loadConfig();
+      const list = $("#source-checks");
+      list.replaceChildren();
+      for (const check of sourceCheckRows(result, state.config.data_source_mode)) {
+        const row = document.createElement("li");
+        row.className = `setup-check${check.ok ? " passed" : ""}`;
+        const title = document.createElement("strong");
+        title.textContent = `${check.ok ? "✓" : "待确认"} ${check.label}`;
+        const detail = document.createElement("span");
+        detail.textContent = check.message;
+        row.append(title, detail);
+        list.append(row);
+      }
+      list.hidden = false;
+      toast("数据源检查结果已更新。");
+    }),
+  );
+  $("#verify-hltv").addEventListener("click", (event) =>
+    run(event.currentTarget, async () => {
+      if (state.dirty.has("advanced")) throw new Error("请先保存或放弃连接设置的修改，再发起人工验证。");
+      if (!(await dialog("发起 HLTV 人工验证", "仅启动服务器上的人工验证流程，需要你自行完成浏览器中的验证；不会自动破解或将启动视为验证成功。", { confirm: "发起验证" }))) return;
+      const result = await api("/api/sources/verify", "POST", {});
+      if (result.started !== true) throw new Error(result.msg || "人工验证未启动，请检查服务器的浏览器环境。");
+      $("#source-verification").textContent = result.msg || "已发起人工验证。请在服务器浏览器中完成操作，再点击检查数据源；当前尚未确认连接成功。";
+      toast("已发起人工验证，完成后请重新检查数据源。");
+      await loadSourceHealth();
+    }),
+  );
   $("#export-config").addEventListener("click", (event) =>
     run(event.currentTarget, exportConfig),
   );
@@ -889,7 +987,7 @@ function installEvents() {
 }
 
 async function editMatch(mid) {
-  const match = state.matches.find((item) => Number(item.id) === mid);
+  const match = state.matches.find((item) => sameSourceId(item.id, mid));
   if (!match) return;
   $$(".match-actions[open]").forEach((menu) => {
     menu.open = false;
@@ -906,7 +1004,7 @@ async function editMatch(mid) {
     },
   );
   if (!result) return;
-  await api(`/api/matches/${mid}`, "PATCH", {
+  await api(matchPath(mid), "PATCH", {
     remind_minutes: result.useGlobal ? null : Number(result.minutes),
   });
   await loadMatches();
@@ -1016,6 +1114,10 @@ async function initialize() {
     pollTimer = setInterval(() => {
       if (!document.hidden && state.ready) {
         loadMatches({ quiet: true });
+        loadSourceHealth().catch((error) => {
+          $("#source-health-error").textContent = `来源状态更新失败：${error.message || "请求失败"}。当前显示上次读取的状态。`;
+          $("#source-health-error").hidden = false;
+        });
         if (state.active === "advanced") loadLogs().catch(() => {});
       }
     }, 30000);

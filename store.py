@@ -15,7 +15,7 @@ from typing import Optional
 
 from astrbot.api import logger
 
-from .config import validate_config
+from .config import SOURCE_DEFAULTS, validate_config
 
 
 class DataStore:
@@ -26,6 +26,7 @@ class DataStore:
     )
 
     _DEFAULTS = {
+        **SOURCE_DEFAULTS,
         "pandascore_token":           "",
         "followed_teams":              [],
         "push_groups":                 [],
@@ -59,6 +60,13 @@ class DataStore:
         "test_mode_enabled":           False,
         "test_target_type":            "private",
         "test_target_id":              "",
+        "source_match_aliases":        {},
+        "source_team_aliases":         {},
+        "source_tournament_aliases":   {},
+        "source_match_catalog":        {},
+        "source_tournament_catalog":   {},
+        "source_match_snapshots":      {},
+        "source_tournament_snapshots": {},
     }
 
     def __init__(self, path: str):
@@ -123,6 +131,63 @@ class DataStore:
 
     def get(self, key, default=None):
         return self._data.get(key, default)
+
+    def _ensure_source_backup(self):
+        if (not self._data.get("source_schema_version")
+                and not getattr(self, "_source_backup_path", None) and os.path.isfile(self.path)):
+            stamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+            path = f"{self.path}.before-multi-source-{stamp}"
+            shutil.copy2(self.path, path)
+            self._source_backup_path = path
+
+    def _coalesce_source_ids_in_memory(self, canonical, former, *, kind="match"):
+        fields = ("notified_tournaments",) if kind == "tournament" else ("notified_upcoming", "notified_finished")
+        for field in fields:
+            old = self._data[field]
+            self._data[field] = list(dict.fromkeys(canonical if value in former else value for value in old))
+
+        receipts = self._data["delivery_receipts"]
+        kinds = ("tournament",) if kind == "tournament" else ("upcoming", "finished", "reschedule")
+        for former_id in former:
+            if former_id == canonical:
+                continue
+            for key in list(receipts):
+                for event in kinds:
+                    prefix = f"{event}:{former_id}"
+                    if key == prefix or (event == "reschedule" and key.startswith(prefix + ":")):
+                        target_key = f"{event}:{canonical}" + key[len(prefix):]
+                        receipts[target_key] = list(dict.fromkeys([*receipts.get(target_key, []), *receipts.pop(key)]))
+            if kind == "match":
+                for field in ("match_schedules", "match_snapshots", "custom_remind_minutes"):
+                    data = self._data[field]
+                    if str(former_id) in data:
+                        data.setdefault(str(canonical), data.pop(str(former_id)))
+
+    def save_source_state(self, updates: dict, *, coalesces=()):
+        if all(self._data.get(key) == value for key, value in updates.items()):
+            if not coalesces:
+                return
+        self._ensure_source_backup()
+        previous = deepcopy(self._data)
+        for canonical, former, kind in coalesces:
+            self._coalesce_source_ids_in_memory(canonical, former, kind=kind)
+        self._data.update(deepcopy(updates))
+        self._data["source_schema_version"] = 1
+        try:
+            self.save()
+        except Exception:
+            self._data = previous
+            raise
+
+    def coalesce_source_ids(self, canonical, former, *, kind="match"):
+        self._ensure_source_backup()
+        previous = deepcopy(self._data)
+        self._coalesce_source_ids_in_memory(canonical, former, kind=kind)
+        try:
+            self.save()
+        except Exception:
+            self._data = previous
+            raise
 
     def set(self, key, value):
         self._data[key] = value
@@ -363,6 +428,12 @@ class DataStore:
         d = deepcopy(self._data)
         d.pop("pandascore_token", None)
         d.pop("web_panel_token", None)
+        d.pop("hltv_proxy_url", None)
+        for key in ("source_match_aliases", "source_team_aliases",
+                    "source_tournament_aliases", "source_match_catalog", "source_tournament_catalog", "source_schema_version"):
+            d.pop(key, None)
+        d.pop("source_match_snapshots", None)
+        d.pop("source_tournament_snapshots", None)
         d.pop("notified_upcoming", None)
         d.pop("notified_finished", None)
         d.pop("notified_tournaments", None)

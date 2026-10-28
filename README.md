@@ -1,6 +1,6 @@
 # CS2 比赛推送插件
 
-为 AstrBot 的 QQ / OneBot（aiocqhttp）适配器提供 CS2 赛程查询、战队关注、赛前提醒、赛后结果、每日赛程和赛事开幕通知，并提供 Web 管理面板。比赛数据来自 PandaScore。
+为 AstrBot 的 QQ / OneBot（aiocqhttp）适配器提供 CS2 赛程查询、战队关注、赛前提醒、赛后结果、每日赛程和赛事开幕通知，并提供 Web 管理面板。比赛数据支持 PandaScore、HLTV 或两者同时使用。
 
 ## 推送效果展示
 
@@ -29,7 +29,7 @@
 - 定时发送每日赛程，也可手动立即推送。
 - 赛前、赛果、时间变更、赛事开幕和每日赛程支持文字或完整图片推送；支持多个推送群和指定机器人实例。
 - AstrBot 内嵌页面管理战队、推送群、提醒、测试目标与配置备份；也可使用独立 Web 面板。
-- 新手引导逐步填写必填的 PandaScore Token 和接收群，再按需设置赛事等级、提醒、图片推送及日报；提供数据源连接检查。
+- 新手引导按所选数据源要求填写 PandaScore Token 和接收群，再按需设置赛事等级、HLTV 星级、提醒、图片推送及日报；提供逐来源连接检查。
 
 图片推送默认开启，赛前、赛报、时间变更、赛程日报和赛事开幕通知均带战队图标。在「推送设置」关闭并保存后，继续发送文字与可点击的直播链接，并附紧凑的战队图标条。图片只显示开赛时分，不包含直播链接。赛程查询、关注与取消关注、关注列表也附队标。内置 56 支战队/俱乐部的队标，优先使用[已核实的官方素材](docs/team-logos.md)，未收录或素材不可用时回退到 API 队标。
 
@@ -41,17 +41,17 @@
 
 - AstrBot，以及已连接并可发送消息的 QQ / OneBot（aiocqhttp）适配器；其他适配器尚未验证。
 - Python 3.10+，依赖见 [requirements.txt](requirements.txt)。
-- 可访问 PandaScore API，且持有具备所需 CS2 数据权限的 [PandaScore Token](https://pandascore.co/)。数据覆盖和请求额度取决于账户方案。
+- 选择 PandaScore 时需要可访问 PandaScore API，且持有具备所需 CS2 数据权限的 [PandaScore Token](https://pandascore.co/)。选择仅 HLTV 时不需要 Token；数据覆盖取决于来源。
 
 ## 安装与配置
 
-1. 在 AstrBot 插件管理中通过下面的仓库地址安装，填写 PandaScore API Token。安装完成后确认插件已加载，依赖已安装。
+1. 在 AstrBot 插件管理中通过下面的仓库地址安装。安装完成后确认插件已加载，依赖已安装；仅 PandaScore 或双源模式再填写 PandaScore API Token。
 2. 重载插件后，在 AstrBot WebUI 的插件详情中打开「CS2 管理」。内嵌页面沿用 AstrBot 登录和亮暗主题，无需映射额外端口或输入面板令牌；已在 AstrBot 4.27.4 验证。旧版 AstrBot 不支持内嵌页面时，可使用下方独立面板。
 3. 在「订阅管理」添加推送群、搜索关注战队，在「推送设置」配置提醒与日报，在「高级维护」修改数据源和运行设置。设置修改后点击当前页的保存按钮；添加或移除群和战队会立即生效。
 4. 如需独立面板，默认地址为 `127.0.0.1:8765`。管理员私聊机器人发送 `/cs面板` 获取地址和令牌。关闭独立面板不影响内嵌页面。
 
 ```text
-https://github.com/Aut-sep/Astrbot-plugin-CS2-match-push
+https://github.com/yano486/Astrbot-plugin-CS2-match-push
 ```
 
 首次使用可以依次发送：
@@ -76,7 +76,15 @@ https://github.com/Aut-sep/Astrbot-plugin-CS2-match-push
 
 | 配置项 | 默认值 | 用途 |
 | --- | --- | --- |
-| `pandascore_token` | 空 | 必填，PandaScore API Token |
+| `data_source_mode` | `pandascore` | `pandascore`、`hltv` 或 `both` |
+| `primary_source` | `pandascore` | 双源记录字段冲突时采用的主源 |
+| `pandascore_token` | 空 | 启用 PandaScore 时需要的 API Token |
+| `hltv_proxy_url` | 空 | 可选的 HTTP(S)/SOCKS 代理地址；不会在导出和状态中回显 |
+| `hltv_browser_fallback` | `true` | 标准 HTTP 传输失败时是否允许使用本机 Chromium；检测到挑战页不会自动换通道 |
+| `hltv_headful` | `false` | 人工验证时启动有头浏览器；需要本机显示环境 |
+| `hltv_request_min_gap` | `90` | HLTV 请求之间的最小间隔（秒） |
+| `hltv_cache_ttl` | `180` | 已验证页面的内存缓存时间（秒） |
+| `hltv_min_stars` | `1` | HLTV 赛程的最低星级（0～5） |
 | `push_platform_id` | 空 | 多机器人时指定 AstrBot 平台实例 ID |
 | `image_push_enabled` | `true` | 默认发送带队标的赛事图片；关闭后文字附战队图标条 |
 | `fetch_interval_min` | `10` | 自动刷新赛程的间隔，单位分钟 |
@@ -86,6 +94,15 @@ https://github.com/Aut-sep/Astrbot-plugin-CS2-match-push
 | `web_panel_port` | `8765` | 面板监听端口 |
 
 面板中还可配置赛事等级（默认 S、A）、赛前提醒（默认 10 分钟）、日报（默认关闭）、赛事开幕提醒（默认提前 2 小时）和黑名单。日报时间按北京时间（UTC+8）解释。
+
+### 数据源与 HLTV 注意事项
+
+- `pandascore` 保持旧版行为；`hltv` 不要求 PandaScore Token；`both` 只在两个来源都检查通过时才视为配置检查成功。
+- 双源只在队伍、赛事、开赛时间和赛制都足够明确时合并；无法排除歧义时保留两条并标记疑似重复。已确认的关联会保存本地稳定身份，切换来源不会重复已成功的通知。
+- PandaScore 的 S/A/B 等级和 HLTV 星级是两套含义，不互相换算。合并记录会标注实际来源、更新时间、冲突或缓存状态。
+- HLTV 可能返回挑战页、限流或结构变化。插件会报告“访问受阻/需要人工验证”，不会自动破解 CAPTCHA、轮换代理或高频重试；受阻时不会把错误页当成空赛程。
+- 浏览器后备通道是可选能力：需要单独安装 Python Playwright 及匹配的 Chromium，插件不会在加载时偷偷下载浏览器内核。普通 HTTP 传输失败时才会尝试后备通道；检测到挑战页或限流会停下并显示明确状态，人工验证必须显式启动。
+- 手动验证只应由管理员在运行插件的本机完成；不要把带认证信息的代理地址写入截图、日志或公开配置。
 
 ### 常用指令
 
@@ -114,6 +131,8 @@ https://github.com/Aut-sep/Astrbot-plugin-CS2-match-push
 
 在 AstrBot 插件管理中更新并重载插件。更新前备份插件数据目录中的 `cs_data.json`，其中包含配置和通知状态；面板导出的 JSON 仅用于迁移可编辑配置，不是完整备份。更新保留插件标识 `astrbot_plugin_cs_match` 和原数据目录，避免现有配置失联。
 
+首次使用多源功能时，插件会在同目录创建 `cs_data.json.before-multi-source-<时间戳>` 完整备份，再写入来源关联、最近成功快照和通知身份迁移结果。若需要回滚，应先停止插件并用升级前的完整数据文件恢复；不要只删除来源字段，也不要清空通知记录。
+
 ### 常见问题
 
 - **没有比赛**：检查 Token 和日志中的 API 错误，再检查获取天数、赛事等级、关注战队及黑名单。数据源未收录或未确定开赛时间的比赛可能不会进入提醒队列。
@@ -133,4 +152,4 @@ https://github.com/Aut-sep/Astrbot-plugin-CS2-match-push
 
 ## 问题反馈
 
-通过 [GitHub Issues](https://github.com/Aut-sep/Astrbot-plugin-CS2-match-push/issues) 反馈问题，请提供插件版本、AstrBot 版本、适配器、复现步骤和脱敏日志。不要上传 API Token、面板令牌或完整运行配置。
+通过 [GitHub Issues](https://github.com/yano486/Astrbot-plugin-CS2-match-push/issues) 反馈问题，请提供插件版本、AstrBot 版本、适配器、复现步骤和脱敏日志。不要上传 API Token、面板令牌或完整运行配置。

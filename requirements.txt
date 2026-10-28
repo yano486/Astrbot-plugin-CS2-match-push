@@ -1,2 +1,4 @@
 aiohttp>=3.9
 Pillow>=10.0
+# Optional HLTV browser fallback; install Playwright and its Chromium separately
+# when standard HTTP is blocked and local manual verification is required.

@@ -43,10 +43,29 @@
           <div class="setup-heading"><h3 id="setup-step-title" tabindex="-1"></h3><button type="button" class="button ghost" id="setup-close">稍后继续</button></div>
           <div class="notice error" id="setup-error" role="alert" hidden></div>
           <form id="setup-source-form" data-setup-step="0">
-            <p>插件需要 PandaScore 提供 CS2 赛程。先连接数据源，再配置接收群。</p>
+            <p>先选择并连接赛程数据源，再配置接收群。仅使用 HLTV 时无需 PandaScore Token。</p>
+            <div class="setup-fields">
+              <label class="field">数据源模式<select data-setup-source-key="data_source_mode"><option value="pandascore">仅 PandaScore</option><option value="hltv">仅 HLTV</option><option value="both">双源同时启用</option></select></label>
+              <label class="field" id="setup-primary-field" hidden>双源主源<select data-setup-source-key="primary_source"><option value="pandascore">PandaScore</option><option value="hltv">HLTV</option></select><small>确认属于同场比赛但字段冲突时，以主源为准。</small></label>
+            </div>
+            <fieldset class="source-fields" id="setup-pandascore-fields">
             <ol class="setup-instructions"><li>打开 <a href="https://developers.pandascore.co/docs/authentication" target="_blank" rel="noopener noreferrer">PandaScore 官方 Token 说明</a>，从其中的 Dashboard 入口登录或注册。</li><li>在 Dashboard 复制你的 API Token，粘贴到下方。</li><li>点击「验证并保存」。验证失败时，新 Token 不会覆盖原配置。</li></ol>
-            <label class="field">PandaScore Token <span class="setup-required">必填</span><input id="setup-token" type="password" autocomplete="new-password" spellcheck="false" placeholder="粘贴 API Token；已有配置时可留空"><small id="setup-token-hint"></small></label>
+            <label class="field">PandaScore Token <span class="setup-required">启用 PandaScore 时必填</span><input id="setup-token" data-setup-source-key="pandascore_token" type="password" autocomplete="new-password" spellcheck="false" placeholder="粘贴 API Token；已有配置时可留空"><small id="setup-token-hint"></small></label>
             <p class="setup-note">Token 不在页面回显。只在你点击验证时发送到插件服务器，由服务器连接 PandaScore；无需发送到聊天中。</p>
+            </fieldset>
+            <fieldset class="source-fields" id="setup-hltv-fields" hidden disabled>
+              <label class="field">HLTV 代理地址（可选）<input type="password" data-setup-source-key="hltv_proxy_url" autocomplete="new-password" spellcheck="false" placeholder="留空保留已保存的代理地址"><small id="setup-proxy-hint">含认证信息的地址不回显，留空保留；不需要代理时无需填写。</small></label>
+              <label class="inline-check clear-secret"><input type="checkbox" id="setup-clear-proxy">清除已保存的 HLTV 代理地址</label>
+              <label class="switch-row"><span><strong>浏览器回退</strong><small>普通请求受阻时尝试已安装的浏览器，不会自动破解验证码。</small></span><input type="checkbox" role="switch" data-setup-source-key="hltv_browser_fallback" checked></label>
+              <label class="switch-row"><span><strong>显示 HLTV 浏览器窗口</strong><small>需要服务器具备图形环境；人工验证由管理员主动发起。</small></span><input type="checkbox" role="switch" data-setup-source-key="hltv_headful"></label>
+              <div class="setup-fields">
+                <label class="field">HLTV 请求最小间隔（秒）<input type="number" min="1" max="3600" step="1" required data-setup-source-key="hltv_request_min_gap" value="90"><small>低频请求，避免连续重试。</small></label>
+                <label class="field">HLTV 缓存期限（秒）<input type="number" min="0" max="86400" step="1" required data-setup-source-key="hltv_cache_ttl" value="180"><small>0 表示不使用缓存。</small></label>
+                <label class="field">HLTV 最低星级<input type="number" min="0" max="5" step="1" required data-setup-source-key="hltv_min_stars" value="1"><small>0 表示不限星级，不等同于 PandaScore 的 S/A 等级。</small></label>
+              </div>
+              <p class="setup-note">若提示需要人工验证，可在「高级维护」保存配置后主动发起验证。此处检查不会假装验证通过。</p>
+            </fieldset>
+            <ul id="setup-source-checks" class="setup-checks" aria-live="polite" hidden></ul>
             <div class="setup-actions"><button type="submit" id="setup-source-save" class="button primary">验证并保存，下一步</button></div>
           </form>
           <form id="setup-group-form" data-setup-step="1" hidden>
@@ -62,8 +81,8 @@
               <label class="field">提前几分钟提醒<input type="number" min="1" max="120" required data-setup-key="remind_minutes"><small>比赛开始前提醒一次；单场也可以独立调整。</small></label>
               <label class="field">推送平台 ID<input type="text" data-setup-key="push_platform_id" placeholder="只有一个 QQ 机器人时留空"><small>多个 QQ 机器人时，填写 AstrBot 中的目标平台 ID。</small></label>
             </div>
-            <fieldset class="tiers"><legend>推送哪些级别的赛事</legend><label><input type="checkbox" value="s" data-setup-tier>S</label><label><input type="checkbox" value="a" data-setup-tier>A</label><label><input type="checkbox" value="b" data-setup-tier>B</label><label><input type="checkbox" value="c" data-setup-tier>C</label><label><input type="checkbox" value="d" data-setup-tier>D</label><label><input type="checkbox" value="unranked" data-setup-tier>未评级</label></fieldset>
-            <p class="setup-note">新安装默认关注 S、A 级赛事。不关注具体战队也能收到所选级别的比赛；喜欢的队伍可在「订阅管理」中用简称或中文外号搜索关注。</p>
+            <fieldset class="tiers"><legend>PandaScore 赛事级别（仅该来源生效）</legend><label><input type="checkbox" value="s" data-setup-tier>S</label><label><input type="checkbox" value="a" data-setup-tier>A</label><label><input type="checkbox" value="b" data-setup-tier>B</label><label><input type="checkbox" value="c" data-setup-tier>C</label><label><input type="checkbox" value="d" data-setup-tier>D</label><label><input type="checkbox" value="unranked" data-setup-tier>未评级</label></fieldset>
+            <p class="setup-note">PandaScore 新安装默认关注 S、A 级赛事；HLTV 使用上一步设置的独立星级，不作等级换算。不关注具体战队也能收到符合筛选的比赛；喜欢的队伍可在「订阅管理」中搜索关注。</p>
             <label class="inline-check"><input type="checkbox" data-setup-key="image_push_enabled">图片推送（默认开启，包含队标、赛程和比分）</label>
             <label class="inline-check"><input type="checkbox" data-setup-key="daily_push_enabled">每天定时发送赛程日报</label>
             <div class="setup-fields">
@@ -144,7 +163,7 @@
           </div>
         </div>
         <div id="setup-notice" class="notice" hidden>
-          尚未配置 PandaScore Token。请先完成页面上方的新手引导，或在「高级维护」中填写。
+          数据源配置尚未完成。请先完成页面上方的新手引导，或在「高级维护」中配置数据源。
         </div>
         <div class="card">
           <div class="card-header">
@@ -263,7 +282,7 @@
               同时满足赛事级别和黑名单筛选的比赛才会进入推送范围。关注优先开启后，关注战队可绕过级别限制，仍受黑名单限制。
             </p>
             <fieldset class="tiers">
-              <legend>允许的赛事级别</legend>
+              <legend>允许的 PandaScore 赛事级别</legend>
               <label
                 ><input type="checkbox" data-key="min_tiers" value="s" />S
                 级</label
@@ -287,6 +306,7 @@
                 />未定级</label
               >
             </fieldset>
+            <p class="muted">HLTV 使用独立星级筛选，可在「高级维护」的数据源设置中调整，不与 S/A 等级换算。</p>
             <label class="switch-row"
               ><span
                 ><strong>关注战队优先</strong
@@ -477,8 +497,13 @@
           <div class="card padded">
             <h3>数据源</h3>
             <p class="description">
-              使用 PandaScore 获取 CS2 赛程。Token 只用于连接数据源。
+              选择 PandaScore、HLTV 或双源获取 CS2 赛程。各来源独立检查连接，配置完整不代表连接正常。
             </p>
+            <div class="form-grid">
+              <label class="field">数据源模式<select data-key="data_source_mode"><option value="pandascore">仅 PandaScore</option><option value="hltv">仅 HLTV</option><option value="both">双源同时启用</option></select></label>
+              <label class="field" data-source-primary hidden>双源主源<select data-key="primary_source"><option value="pandascore">PandaScore</option><option value="hltv">HLTV</option></select><small>同场比赛存在冲突时以主源为准；实际来源会在比赛条目中标明。</small></label>
+            </div>
+            <fieldset class="source-fields" data-source-provider="pandascore">
             <label class="field"
               >PandaScore Token
               <div class="secret-input">
@@ -503,6 +528,26 @@
                 data-clear="pandascore_token"
               />清除已保存的 Token</label
             >
+            </fieldset>
+            <fieldset class="source-fields" data-source-provider="hltv" hidden disabled>
+              <label class="field">HLTV 代理地址（可选）
+                <div class="secret-input"><input type="password" data-key="hltv_proxy_url" autocomplete="new-password" spellcheck="false" placeholder="留空保留已保存的代理地址"><button type="button" class="button ghost" data-reveal="hltv_proxy_url" aria-label="显示本次输入的 HLTV 代理地址">显示</button></div>
+                <small id="hltv-proxy-hint">代理地址可能含认证信息，不在页面回显。留空保留原值，输入新值可替换。</small>
+              </label>
+              <label class="inline-check clear-secret"><input type="checkbox" data-clear="hltv_proxy_url">清除已保存的 HLTV 代理地址</label>
+              <label class="switch-row"><span><strong>浏览器回退</strong><small>普通请求受阻时尝试已安装的浏览器，不会自动破解验证码。</small></span><input type="checkbox" role="switch" data-key="hltv_browser_fallback"></label>
+              <label class="switch-row"><span><strong>显示 HLTV 浏览器窗口</strong><small>需要服务器具备图形环境；人工验证由管理员主动发起。</small></span><input type="checkbox" role="switch" data-key="hltv_headful"></label>
+              <div class="form-grid">
+                <label class="field">HLTV 请求最小间隔<input type="number" data-key="hltv_request_min_gap" min="1" max="3600" step="1" required><small>单位：秒。默认 90 秒，避免连续重试。</small></label>
+                <label class="field">HLTV 缓存期限<input type="number" data-key="hltv_cache_ttl" min="0" max="86400" step="1" required><small>单位：秒。默认 180 秒；0 表示不使用缓存。</small></label>
+                <label class="field">HLTV 最低星级<input type="number" data-key="hltv_min_stars" min="0" max="5" step="1" required><small>0 表示不限星级；与 PandaScore 的 S/A 等级独立。</small></label>
+              </div>
+            </fieldset>
+            <div class="source-status" id="source-status" aria-live="polite"></div>
+            <p class="muted" id="source-health-error" role="status" hidden></p>
+            <div class="test-row"><button type="button" class="button" id="check-sources">检查已保存的数据源</button><button type="button" class="button" id="verify-hltv" hidden>发起 HLTV 人工验证</button><span class="muted">仅检查已保存的配置，请先保存修改。</span></div>
+            <p class="muted" id="source-verification" aria-live="polite">人工验证需要你在服务器提供的浏览器中操作；发起验证不等于验证通过。</p>
+            <ul class="setup-checks" id="source-checks" aria-live="polite" hidden></ul>
             <div class="form-grid">
               <label class="field"
                 >获取周期<input

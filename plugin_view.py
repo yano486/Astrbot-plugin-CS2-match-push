@@ -7,6 +7,7 @@ requests before invoking the handler. No panel token crosses the iframe bridge.
 import json
 import re
 from types import SimpleNamespace
+from urllib.parse import unquote
 
 from astrbot.api import logger
 
@@ -20,6 +21,8 @@ ROUTES = (
     ("GET", r"/api/config/export", "export_config"),
     ("POST", r"/api/config/import", "import_config"),
     ("POST", r"/api/setup/check", "check_setup"),
+    ("POST", r"/api/sources/check", "check_sources"),
+    ("POST", r"/api/sources/verify", "verify_source"),
     ("GET", r"/api/matches", "get_matches"),
     ("POST", r"/api/refresh", "refresh"),
     ("POST", r"/api/push_now", "push_now"),
@@ -33,8 +36,8 @@ ROUTES = (
     ("GET", r"/api/logs", "get_logs"),
     ("POST", r"/api/notified/clear", "clear_notified"),
     ("POST", r"/api/tasks/rebuild", "rebuild_tasks"),
-    ("PATCH", r"/api/matches/(?P<mid>[0-9]+)", "patch_match"),
-    ("POST", r"/api/matches/(?P<mid>[0-9]+)/rebuild", "rebuild_match"),
+    ("PATCH", r"/api/matches/(?P<mid>(?:hltv:)?[0-9]+)", "patch_match"),
+    ("POST", r"/api/matches/(?P<mid>(?:hltv:)?[0-9]+)/rebuild", "rebuild_match"),
 )
 
 
@@ -106,6 +109,7 @@ class PluginView:
                 body = envelope.get("body")
             if not isinstance(path, str) or not isinstance(method, str):
                 raise ConfigError("invalid panel operation")
+            path = unquote(path)
             for allowed_method, pattern, handler_name in ROUTES:
                 match = re.fullmatch(pattern, path)
                 if method == allowed_method and match:

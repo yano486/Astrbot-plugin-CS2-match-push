@@ -33,7 +33,8 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api import logger
 
 from .store import DataStore
-from .client import PandaScoreClient
+from .data_sources import SourceRouter
+from .config import SOURCE_DEFAULTS, sources_configured
 from .formatters import (
     fmt_schedule,
     now_utc, now_cst, fmt_time, parse_dt,
@@ -60,7 +61,7 @@ WEB_PANEL_HOST        = "127.0.0.1"
     "astrbot_plugin_cs_match",
     "Aut-sep",
     "每N分钟静默刷新，时间变更时提醒，精确倒计时推送赛前提醒和赛后结果，内置 Web 管理面板",
-    "4.2.0",
+    "4.3.0",
 )
 class CSMatchPlugin(Star):
 
@@ -79,6 +80,7 @@ class CSMatchPlugin(Star):
                 "pandascore_token", "fetch_interval_min", "fetch_ahead_days",
                 "web_panel_host", "web_panel_port", "web_panel_enabled", "image_push_enabled",
                 "push_platform_id",
+                *SOURCE_DEFAULTS,
             ) if config.get(key) is not None}
             if "fetch_ahead_days" not in initial and config.get("fetch_ahead_hours") is not None:
                 initial["fetch_ahead_hours"] = config.get("fetch_ahead_hours")
@@ -90,7 +92,12 @@ class CSMatchPlugin(Star):
         if self._token and not str(self.store.get("pandascore_token") or "").strip():
             self.store.set("pandascore_token", self._token)
         self._sync_runtime_config_from_store()
-        self.client = PandaScoreClient(self._token)
+        self.client = SourceRouter(self._source_config(), self.store)
+        self._source_generation = 0
+        self._suppress_reschedule_once = False
+        self._resume_result_matches = {}
+        self._source_switch_lock = asyncio.Lock()
+        self._verification_task = None
         self._scheduled: list    = []
         self._loop_task           = None
         self._daily_push_task     = None
@@ -113,7 +120,7 @@ class CSMatchPlugin(Star):
         self.plugin_view = PluginView(self)
         self.embedded_available = self.plugin_view.register()
 
-        if not self._token:
+        if not self._token and self.store.get("data_source_mode") != "hltv":
             logger.warning("[CS] ⚠️ 未配置 PandaScore Token！请在 WebUI 插件配置或 Web 面板中填写 pandascore_token")
         else:
             logger.info(f"[CS] 配置加载完成: 刷新间隔={self._fetch_interval}分钟, Token=已配置")
@@ -202,8 +209,74 @@ class CSMatchPlugin(Star):
     async def reload_runtime_config(self):
         self._sync_runtime_config_from_store()
         self._token = str(self.store.get("pandascore_token") or "").strip()
-        # 复用会话，避免修改无关设置时关闭正在请求的连接。
-        self.client.headers["Authorization"] = f"Bearer {self._token}"
+        config = self._source_config()
+        async with self._source_switch_lock:
+            if config == self.client.config:
+                return
+            old = self.client
+            replacement = SourceRouter(config, self.store)
+            self._source_generation += 1
+            self._suppress_reschedule_once = True
+            self._resume_result_matches.update({mid: item["match"] for mid, item in self._result_meta.items()})
+            tasks = [*self._match_tasks.values(), *self._result_tasks.values(), *self._tournament_tasks.values()]
+            if self._verification_task and not self._verification_task.done():
+                tasks.append(self._verification_task)
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            self._match_tasks.clear()
+            self._scheduled_mids.clear()
+            self._result_tasks.clear()
+            self._result_meta.clear()
+            self._tournament_tasks.clear()
+            self._pending_reschedules.clear()
+            self.client = replacement
+            await old.close()
+
+    def _canonical_match_id(self, value):
+        try:
+            return self.client.identity.remote_ids(value, "match")[0]
+        except (AttributeError, TypeError, ValueError, KeyError):
+            return value
+
+    def _rekey_result_state(self):
+        """Keep result task bookkeeping on the durable ID after source linking."""
+        for old_id, task in list(self._result_tasks.items()):
+            canonical = self._canonical_match_id(old_id)
+            if canonical == old_id:
+                continue
+            self._result_tasks.pop(old_id, None)
+            existing = self._result_tasks.get(canonical)
+            if existing is not None and existing is not task:
+                task.cancel()
+                self._result_meta.pop(old_id, None)
+                continue
+            self._result_tasks[canonical] = task
+            meta = self._result_meta.pop(old_id, None)
+            if meta is not None:
+                meta = deepcopy(meta)
+                if isinstance(meta.get("match"), dict):
+                    meta["match"]["id"] = canonical
+                self._result_meta[canonical] = meta
+
+        for old_id, match in list(self._resume_result_matches.items()):
+            canonical = self._canonical_match_id(old_id)
+            if canonical == old_id:
+                continue
+            self._resume_result_matches.pop(old_id, None)
+            tracked = deepcopy(match)
+            tracked["id"] = canonical
+            self._resume_result_matches[canonical] = tracked
+
+    def _source_config(self):
+        cfg = {key: self.store.get(key, default) for key, default in SOURCE_DEFAULTS.items()}
+        cfg["pandascore_token"] = str(self.store.get("pandascore_token") or "").strip()
+        cfg["hltv_data_dir"] = str(Path(self._data_dir) / "hltv")
+        return cfg
+
+    def _sources_ready(self):
+        return sources_configured(self._source_config())
 
     async def apply_web_panel_config(self) -> bool:
         enabled = bool(self.store.get("web_panel_enabled", True))
@@ -340,6 +413,10 @@ class CSMatchPlugin(Star):
             entry["_t2"] = snap.get("t2") or team_name(m, 1)
             entry["_attempt"] = attempt
             entry["_deadline_sec"] = deadline_sec
+            for opponent in entry.get("opponents") or []:
+                team = opponent.get("opponent") if isinstance(opponent, dict) else None
+                if isinstance(team, dict):
+                    team["_followed"] = self.client.is_followed(team)
             return entry
 
         def _countdown(sched_iso: str | None) -> int | None:
@@ -540,10 +617,13 @@ class CSMatchPlugin(Star):
         """检查即将开始的赛事，符合条件则安排开幕通知倒计时任务"""
         if not self.store.get("tournament_announce_enabled", True):
             return
-        if not self._token:
+        if not self._sources_ready():
             return
 
+        generation = self._source_generation
         tournaments = await self.client.get_upcoming_tournaments(per_page=50)
+        if generation != self._source_generation:
+            return
         if not tournaments:
             return
 
@@ -583,12 +663,18 @@ class CSMatchPlugin(Star):
 
             tier = match_tier({"tournament": tour})
             # ID 精确匹配，兼容旧版名称匹配
-            has_followed = bool(tour_ids & followed_ids) or (
+            has_followed = any(self.client.is_followed(team) for team in tour_teams) or bool(tour_ids & followed_ids) or (
                 bool(followed_names) and any(fn == tn for fn in followed_names for tn in tour_names)
             )
 
             # 判断是否推送：级别符合 OR 关注战队参赛
-            should_push = (tier in push_tiers) or (has_followed and notify_all_fol)
+            if tour.get("_pandascore_tier"):
+                source_selected = tour["_pandascore_tier"] in push_tiers
+            elif tour.get("_source") == "hltv":
+                source_selected = bool(tour.get("_featured"))
+            else:
+                source_selected = tier in push_tiers
+            should_push = source_selected or (has_followed and notify_all_fol)
             if not should_push:
                 continue
 
@@ -679,16 +765,20 @@ class CSMatchPlugin(Star):
                     break
 
     async def _fetch_and_schedule_locked(self):
-        if not self._token:
+        if not self._sources_ready():
             return
 
+        generation = self._source_generation
         now = now_utc()
         cutoff = now + timedelta(days=self._fetch_ahead)
         matches = await self.client.get_upcoming_matches(per_page=100, until=cutoff)
+        if generation != self._source_generation:
+            return
         if matches is None:
             logger.warning("[CS] 日程请求失败，保留已有任务")
             self.panel.push_log("WARN", "日程请求失败，保留已有任务")
             return
+        self._rekey_result_state()
 
         followed_ids    = self.store.get_followed_team_ids()
         followed_names  = [t["name"].lower() for t in self.store.get_followed_teams() if t.get("id") is None]  # 仅兼容旧版名称关注
@@ -703,6 +793,8 @@ class CSMatchPlugin(Star):
                 opp_id   = (opp.get("opponent") or {}).get("id")
                 opp_name = ((opp.get("opponent") or {}).get("name") or "").lower()
                 if opp_id and opp_id in followed_ids:
+                    return True
+                if self.client.is_followed(opp.get("opponent") or {}):
                     return True
                 # 旧版兼容：纯名称匹配（仅当无 ID 记录时）
                 if followed_names and any(fn == opp_name for fn in followed_names):
@@ -732,7 +824,13 @@ class CSMatchPlugin(Star):
             tier         = match_tier(m)
             has_followed = _is_followed_match(m)
 
-            if tier in push_tiers or (has_followed and notify_all_fol):
+            if m.get("_pandascore_tier"):
+                selected = m["_pandascore_tier"] in push_tiers
+            elif m.get("_source") == "hltv":
+                selected = int(m.get("_stars") or 0) >= self.store.get("hltv_min_stars", 1)
+            else:
+                selected = tier in push_tiers
+            if selected or (has_followed and notify_all_fol):
                 to_schedule.append(m)
 
         self._scheduled = to_schedule
@@ -769,7 +867,7 @@ class CSMatchPlugin(Star):
                 t1_changed    = old_snap.get("t1") == "TBD" and new_t1 != "TBD"
                 t2_changed    = old_snap.get("t2") == "TBD" and new_t2 != "TBD"
 
-                if sched_changed:
+                if sched_changed and not self._suppress_reschedule_once:
                     old_fmt = fmt_time(old_snap.get("sched"))
                     new_fmt = fmt_time(new_sched)
                     logger.info(f"[CS] 比赛 {mid} 时间变更：{old_fmt} → {new_fmt}")
@@ -812,6 +910,8 @@ class CSMatchPlugin(Star):
 
             if mid in self._scheduled_mids:
                 continue
+            if mid in self._result_tasks:
+                continue
 
             # 使用自定义提醒时间（若有），否则用全局设置
             remind_min = self.store.get_custom_remind(mid)
@@ -830,6 +930,11 @@ class CSMatchPlugin(Star):
                 self._notified_reschedule[mid] = new_sched
                 self._pending_reschedules.pop(mid, None)
                 self.store.clear_delivery(key)
+        self._suppress_reschedule_once = False
+        for mid, tracked in list(self._resume_result_matches.items()):
+            if mid not in self._result_tasks and not self.store.is_finished_notified(mid):
+                self._result_tasks[mid] = self._create_background_task(self._run_result_poll(tracked), f"source_resume:{mid}")
+            self._resume_result_matches.pop(mid, None)
 
     async def _schedule_match(self, match: dict, remind_min: int):
         mid = match["id"]
@@ -895,15 +1000,18 @@ class CSMatchPlugin(Star):
     async def _run_result_poll(self, match: dict):
         """阶段2：开赛后独立轮询结果，记录进度供 Web 面板展示"""
         mid       = match["id"]
+        meta_key  = self._canonical_match_id(mid)
         num_games = match.get("number_of_games", 1) or 1
-        logger.info(f"[CS] 比赛 {mid} BO{num_games} 开始轮询结果")
+        logger.info(f"[CS] 比赛 {meta_key} BO{num_games} 开始轮询结果")
 
         max_query_seconds = (5 * 3600) + 3600
         deadline  = now_utc() + timedelta(seconds=max_query_seconds)
         attempt   = 0
 
-        self._result_meta[mid] = {
-            "match":    match,
+        tracked_match = dict(match)
+        tracked_match["id"] = meta_key
+        self._result_meta[meta_key] = {
+            "match":    tracked_match,
             "attempt":  0,
             "deadline": deadline.isoformat(),
             "started":  now_utc().isoformat(),
@@ -911,30 +1019,39 @@ class CSMatchPlugin(Star):
 
         try:
             while True:
+                logical_mid = self._canonical_match_id(mid)
+                if logical_mid != meta_key:
+                    self._result_meta[logical_mid] = self._result_meta.pop(meta_key, {
+                        "match": match, "attempt": attempt, "deadline": deadline.isoformat(),
+                    })
+                    self._result_meta[logical_mid]["match"] = dict(self._result_meta[logical_mid].get("match") or match,
+                                                                     id=logical_mid)
+                    meta_key = logical_mid
+                match_id = logical_mid
                 if now_utc() >= deadline:
-                    logger.warning(f"[CS] 比赛 {mid} 超过截止时间，放弃查询结果")
-                    self.panel.push_log("WARN", f"比赛 {mid} 超时放弃（已查询 {attempt} 次）")
+                    logger.warning(f"[CS] 比赛 {match_id} 超过截止时间，放弃查询结果")
+                    self.panel.push_log("WARN", f"比赛 {match_id} 超时放弃（已查询 {attempt} 次）")
                     return
 
-                if self.store.is_finished_notified(mid):
+                if self.store.is_finished_notified(match_id):
                     return
 
-                result = await self.client.get_match_result(mid)
+                result = await self.client.get_match_result(match_id)
                 attempt += 1
-                self._result_meta[mid]["attempt"] = attempt
+                self._result_meta[meta_key]["attempt"] = attempt
 
                 if result and result.get("status") == "finished":
-                    if self.store.is_finished_notified(mid):
+                    if self.store.is_finished_notified(match_id):
                         return
                     followed = self.store.get_followed_team_names()
                     if await self._deliver_notification(
-                        f"finished:{mid}", lambda: self._push_finished(result, followed),
+                        f"finished:{match_id}", lambda: self._push_finished(result, followed),
                     ):
-                        self.store.mark_finished_notified(mid)
-                        self.panel.push_log("OK", f"已推送赛后结果：比赛 {mid}（查询 {attempt} 次）")
+                        self.store.mark_finished_notified(match_id)
+                        self.panel.push_log("OK", f"已推送赛后结果：比赛 {match_id}（查询 {attempt} 次）")
                         return
                 elif result and result.get("status") == "canceled":
-                    self.panel.push_log("INFO", f"比赛 {mid} 已取消，停止结果轮询")
+                    self.panel.push_log("INFO", f"比赛 {match_id} 已取消，停止结果轮询")
                     return
 
                 interval  = RESULT_CHECK_INTERVAL if attempt <= 6 else RESULT_CHECK_INTERVAL * 3
@@ -946,9 +1063,11 @@ class CSMatchPlugin(Star):
                 except asyncio.CancelledError:
                     raise
         finally:
-            if self._result_tasks.get(mid) is asyncio.current_task():
-                self._result_tasks.pop(mid, None)
-                self._result_meta.pop(mid, None)
+            for task_id, task in list(self._result_tasks.items()):
+                if task is asyncio.current_task():
+                    self._result_tasks.pop(task_id, None)
+                    self._result_meta.pop(task_id, None)
+            self._result_meta.pop(meta_key, None)
 
     async def _push_upcoming(self, match: dict, remind_min: int,
                              custom_streams: list, followed: list,

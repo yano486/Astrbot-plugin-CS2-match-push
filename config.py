@@ -20,14 +20,44 @@ INTEGER_RANGES = {
     "fetch_ahead_days": (1, 30),
     "daily_push_days": (1, 30),
     "tournament_announce_hours": (1, 168),
+    "hltv_min_stars": (0, 5),
+    "hltv_request_min_gap": (1, 3600),
+    "hltv_cache_ttl": (0, 86400),
 }
 BOOLEAN_KEYS = {
     "reschedule_notify", "web_panel_enabled", "notify_all_followed",
     "daily_push_enabled", "tournament_announce_enabled", "image_push_enabled",
     "test_mode_enabled",
+    "hltv_browser_fallback", "hltv_headful",
 }
 STRING_KEYS = {"pandascore_token", "web_panel_token", "test_target_id", "push_platform_id"}
 STRING_LIST_KEYS = {"blacklist_teams", "blacklist_leagues"}
+
+SOURCE_DEFAULTS = {
+    "data_source_mode": "pandascore", "primary_source": "pandascore",
+    "hltv_proxy_url": "", "hltv_browser_fallback": True, "hltv_headful": False,
+    "hltv_request_min_gap": 90, "hltv_cache_ttl": 180, "hltv_min_stars": 1,
+}
+
+
+def source_id(value, name="source id") -> int | str:
+    """Keep legacy PandaScore numbers; qualify IDs from other sources."""
+    if isinstance(value, str):
+        value = value.strip()
+        if re.fullmatch(r"hltv:[1-9][0-9]*", value):
+            return value
+    return integer(value, name, 1)
+
+
+def enabled_sources(cfg: dict) -> tuple[str, ...]:
+    mode = cfg.get("data_source_mode", "pandascore")
+    return ("pandascore", "hltv") if mode == "both" else (mode,)
+
+
+def sources_configured(cfg: dict) -> bool:
+    return "pandascore" not in enabled_sources(cfg) or bool(
+        str(cfg.get("pandascore_token") or "").strip()
+    )
 
 
 def integer(value, name: str, minimum: int, maximum: int | None = None) -> int:
@@ -92,6 +122,28 @@ def validate_config(cfg: dict) -> dict:
     if not isinstance(cfg, dict):
         raise ConfigError("configuration must be a JSON object")
     result = {}
+    for key, choices in (
+        ("data_source_mode", {"pandascore", "hltv", "both"}),
+        ("primary_source", {"pandascore", "hltv"}),
+    ):
+        if key in cfg:
+            value = string(cfg[key], key)
+            if value not in choices:
+                raise ConfigError(f"invalid {key}")
+            result[key] = value
+    if "hltv_proxy_url" in cfg:
+        proxy = string(cfg["hltv_proxy_url"], "hltv_proxy_url")
+        if proxy:
+            try:
+                parsed = urlsplit(proxy)
+                valid = (parsed.scheme in {"http", "https", "socks5", "socks5h"}
+                         and bool(parsed.hostname) and parsed.port is not None
+                         and not any(ord(c) < 32 for c in proxy) and len(proxy) <= 4096)
+            except ValueError:
+                valid = False
+            if not valid:
+                raise ConfigError("hltv_proxy_url must be an HTTP(S) or SOCKS proxy URL with a port")
+        result["hltv_proxy_url"] = proxy
     for key, bounds in INTEGER_RANGES.items():
         if key in cfg:
             result[key] = integer(cfg[key], key, *bounds)
@@ -167,7 +219,7 @@ def validate_config(cfg: dict) -> dict:
                     teams.append(name)
                 else:
                     teams.append({
-                        "id": integer(team.get("id"), "team id", 1),
+                        "id": source_id(team.get("id"), "team id"),
                         "name": name,
                         "slug": string(team.get("slug", ""), "team slug"),
                         **({"image_url": string(team["image_url"], "team image URL")}
@@ -181,7 +233,7 @@ def validate_config(cfg: dict) -> dict:
         if not isinstance(reminders, dict):
             raise ConfigError("custom_remind_minutes must be an object")
         result["custom_remind_minutes"] = {
-            str(integer(mid, "match id", 1)): integer(minutes, "remind_minutes", 1, 120)
+            str(source_id(mid, "match id")): integer(minutes, "remind_minutes", 1, 120)
             for mid, minutes in reminders.items()
         }
     return result

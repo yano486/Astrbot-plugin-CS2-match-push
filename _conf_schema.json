@@ -42,6 +42,55 @@
     "hint": "拉取未来 N 天内的比赛，建议 2",
     "default": 2
   },
+  "data_source_mode": {
+    "description": "赛事数据源",
+    "type": "string",
+    "options": ["pandascore", "hltv", "both"],
+    "hint": "pandascore 沿用原功能；hltv 无需 PandaScore Token；both 同时获取并合并确认属于同场的比赛。首次安装后请在 CS2 管理面板修改运行配置。",
+    "default": "pandascore"
+  },
+  "primary_source": {
+    "description": "双源主数据源",
+    "type": "string",
+    "options": ["pandascore", "hltv"],
+    "hint": "确认同场但比分或时间冲突时采用主源，并标记冲突。不会自动切换已配置模式。",
+    "default": "pandascore"
+  },
+  "hltv_proxy_url": {
+    "description": "HLTV 代理地址",
+    "type": "string",
+    "hint": "可选。HTTP(S)/SOCKS 代理 URL；不要把带密码的地址贴到公开日志。",
+    "default": ""
+  },
+  "hltv_browser_fallback": {
+    "description": "HLTV 浏览器后备通道",
+    "type": "bool",
+    "hint": "标准 HTTP 传输失败后尝试本机 Chromium；检测到挑战页不会自动换通道。需单独安装 Playwright 和浏览器内核；仅 PandaScore 模式不启动浏览器。",
+    "default": true
+  },
+  "hltv_headful": {
+    "description": "HLTV 有头浏览器",
+    "type": "bool",
+    "hint": "需要可用的桌面或私有 DISPLAY；不会自动开放 VNC。验证需用户自行完成。",
+    "default": false
+  },
+  "hltv_request_min_gap": {
+    "description": "HLTV 最小请求间隔（秒）",
+    "type": "int",
+    "hint": "默认 90 秒。串行限频与失败退避独立于 PandaScore 刷新。",
+    "default": 90
+  },
+  "hltv_cache_ttl": {
+    "description": "HLTV 页面缓存（秒）",
+    "type": "int",
+    "default": 180
+  },
+  "hltv_min_stars": {
+    "description": "HLTV 比赛最低星级",
+    "type": "int",
+    "hint": "0 至 5。HLTV 星级不等于 PandaScore 的 S/A 等级；已关注战队仍遵循关注优先设置。",
+    "default": 1
+  },
   "image_push_enabled": {
     "description": "图片推送",
     "type": "bool",
