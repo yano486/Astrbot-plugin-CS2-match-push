@@ -12,9 +12,9 @@
 
 ## Global Constraints
 
-- Preserve `astrbot_plugin_cs_match`, user configuration, group subscriptions, notifications, and existing Chinese/English text conventions.
+- Use the independent `astrbot_plugin_cs2` identifier and data directory; preserve this installation's user configuration, group subscriptions, notifications, and existing Chinese/English text conventions.
 - Default old configurations to `data_source_mode=pandascore`, `primary_source=pandascore`.
-- No phone access, real QQ sends, Git commits, branch/worktree creation, pushes or publication in this execution.
+- No phone access or real QQ sends during local development; Git publication requires explicit user authorization.
 - Keep PandaScore numeric IDs backwards-compatible; qualify HLTV IDs before they enter persistent state.
 - Confirmed duplicates share a persisted canonical ID; ambiguous matches remain separate and visibly flagged.
 - Separate HLTV star filtering from PandaScore S/A/B tiers.

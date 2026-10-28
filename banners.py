@@ -589,7 +589,7 @@ class BannerRenderer:
 
         candidates = [
             os.path.join(os.path.dirname(__file__), "..", "..", "plugin_data",
-                         "astrbot_plugin_cs_match", "fonts", "NotoSansCJKsc-Regular.otf"),
+                         "astrbot_plugin_cs2", "fonts", "NotoSansCJKsc-Regular.otf"),
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",

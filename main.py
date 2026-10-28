@@ -58,17 +58,17 @@ WEB_PANEL_HOST        = "127.0.0.1"
 
 
 @register(
-    "astrbot_plugin_cs_match",
+    "astrbot_plugin_cs2",
     "Aut-sep",
     "每N分钟静默刷新，时间变更时提醒，精确倒计时推送赛前提醒和赛后结果，内置 Web 管理面板",
-    "4.3.0",
+    "1.0.0",
 )
 class CSMatchPlugin(Star):
 
     def __init__(self, context: Context, config=None):
         super().__init__(context, config)
         self._load_config(config)
-        data_dir  = StarTools.get_data_dir("astrbot_plugin_cs_match")
+        data_dir  = StarTools.get_data_dir("astrbot_plugin_cs2")
         self._data_dir = str(data_dir)
         self._banner_dir = os.path.join(self._data_dir, "match_banners")
         os.makedirs(self._banner_dir, exist_ok=True)

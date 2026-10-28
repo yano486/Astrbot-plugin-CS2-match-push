@@ -13,7 +13,7 @@ from astrbot.api import logger
 
 from .config import ConfigError
 
-PLUGIN_NAME = "astrbot_plugin_cs_match"
+PLUGIN_NAME = "astrbot_plugin_cs2"
 
 ROUTES = (
     ("GET", r"/api/config", "get_config"),

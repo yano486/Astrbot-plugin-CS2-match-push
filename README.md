@@ -129,7 +129,7 @@ https://github.com/yano486/Astrbot-plugin-CS2-match-push
 
 ### 更新与备份
 
-在 AstrBot 插件管理中更新并重载插件。更新前备份插件数据目录中的 `cs_data.json`，其中包含配置和通知状态；面板导出的 JSON 仅用于迁移可编辑配置，不是完整备份。更新保留插件标识 `astrbot_plugin_cs_match` 和原数据目录，避免现有配置失联。
+在 AstrBot 插件管理中安装或更新本插件。插件标识为 `astrbot_plugin_cs2`，与旧版 `astrbot_plugin_cs_match` 使用不同的数据目录，不会覆盖旧插件的数据。更新前仍建议备份本插件数据目录中的 `cs_data.json`，其中包含配置和通知状态；面板导出的 JSON 仅用于迁移可编辑配置，不是完整备份。
 
 首次使用多源功能时，插件会在同目录创建 `cs_data.json.before-multi-source-<时间戳>` 完整备份，再写入来源关联、最近成功快照和通知身份迁移结果。若需要回滚，应先停止插件并用升级前的完整数据文件恢复；不要只删除来源字段，也不要清空通知记录。
 
@@ -144,7 +144,7 @@ https://github.com/yano486/Astrbot-plugin-CS2-match-push
 
 ## 数据与更新
 
-插件数据保存在 AstrBot 的 `data/plugin_data/astrbot_plugin_cs_match/` 目录。完整备份请保存其中的 `cs_data.json`；面板导出仅包含可编辑设置，不包含 API Token、面板令牌和通知状态。
+插件数据保存在 AstrBot 的 `data/plugin_data/astrbot_plugin_cs2/` 目录。旧版 `astrbot_plugin_cs_match` 的配置不会自动读取；如需迁移，请先备份旧目录，再通过面板导入可编辑配置，并重新检查 Token、推送群和来源设置。完整备份请保存其中的 `cs_data.json`；面板导出不包含 API Token、面板令牌和通知状态。
 
 数据来自 PandaScore，赛程变更、数据延迟或缺失以数据源为准。通知仅在发送接口正常返回后记录成功；程序在发送成功到记录保存之间意外退出，仍可能造成重发。
 

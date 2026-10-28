@@ -94,7 +94,7 @@ def _state_path(config):
     directory = config.get("hltv_data_dir")
     if directory is None:
         from astrbot.api.star import StarTools
-        directory = StarTools.get_data_dir("astrbot_plugin_cs_match")
+        directory = StarTools.get_data_dir("astrbot_plugin_cs2")
     # Credentials belong to this device, not to portable plugin/config exports.
     device = hashlib.sha256(f"{platform.node()}|{platform.system()}|{Path.home()}".encode()).hexdigest()[:16]
     return Path(directory) / "hltv" / f"browser-state-{device}.json"
