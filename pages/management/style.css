@@ -1227,6 +1227,34 @@ dialog p {
   width: 100%;
   min-width: 0;
 }
+
+.layout-row.is-selected,
+.layout-custom.is-selected {
+  outline: 1px solid var(--primary);
+  background: var(--primary-soft);
+  border-radius: 8px;
+}
+.layout-preview-wrap img {
+  cursor: crosshair;
+}
+.layout-customs {
+  margin-top: 18px;
+}
+.layout-customs-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.layout-custom {
+  display: grid;
+  grid-template-columns: 18px minmax(80px, 1fr) 70px 70px auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+  padding: 6px;
+}
+
 @media (max-width: 900px) {
   .layout-workspace {
     grid-template-columns: 1fr;

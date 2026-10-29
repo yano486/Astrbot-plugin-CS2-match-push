@@ -482,7 +482,14 @@ class WebPanel:
 
     async def get_card_layout(self, req):
         layout = validate_card_layout(self.plugin.store.get("card_layout") or {})
-        return self._json({"ok": True, "catalog": catalog(), "layout": layout, "defaults": default_layout()})
+        data = catalog()
+        return self._json({
+            "ok": True,
+            "catalog": data.get("cards", data),
+            "canvas": data.get("canvas") or {},
+            "layout": layout,
+            "defaults": default_layout(),
+        })
 
     async def save_card_layout(self, req):
         body = await self._body(req)

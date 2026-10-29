@@ -501,23 +501,33 @@
       >
         <div class="section-heading">
           <h2>推送卡片排版</h2>
-          <p>按卡片类型开关要显示的元素，并可选填写坐标。坐标留空表示沿用现在的自动排版，默认外观与当前推送图一致。</p>
+          <p>可开关元素、填写坐标或直接点预览图放置。内容超出时卡片会自动增高；也可以先把宽高调大再摆放。</p>
         </div>
         <div class="card padded layout-editor">
           <div class="layout-toolbar">
             <label class="field">卡片类型<select id="layout-type"></select></label>
+            <label class="field">卡片宽度<input id="layout-width" type="number" min="480" max="1600" step="10" value="640"></label>
+            <label class="field">最小高度<input id="layout-height" type="number" min="0" max="4000" step="10" value="0"><small>0 表示按内容自动增高</small></label>
             <div class="layout-actions">
               <button type="button" class="button" id="layout-preview">刷新预览</button>
               <button type="button" class="button ghost" id="layout-reset">恢复此卡默认</button>
               <button type="button" class="button primary" id="layout-save">保存排版</button>
             </div>
           </div>
-          <p id="layout-status" class="muted">打开此页后会生成预览，不会向 QQ 发送消息。</p>
+          <p id="layout-status" class="muted">先点左侧一个元素，再点预览图，即可放到对应位置。预览不会发送到 QQ。</p>
           <div class="layout-workspace">
             <div class="layout-preview-wrap"><img id="layout-preview-image" alt="卡片预览"></div>
             <div class="layout-controls">
               <label class="field">自定义说明文字<input id="layout-note" maxlength="80" placeholder="显示在卡片底部，可留空"></label>
+              <label class="field">自定义角标<input id="layout-badge" maxlength="24" placeholder="例如：关注战队"></label>
               <div id="layout-elements" class="layout-elements"></div>
+              <div class="layout-customs">
+                <div class="layout-customs-head">
+                  <h4>新增文字</h4>
+                  <button type="button" class="button" id="layout-add-custom">添加文字</button>
+                </div>
+                <div id="layout-custom-list"></div>
+              </div>
             </div>
           </div>
         </div>

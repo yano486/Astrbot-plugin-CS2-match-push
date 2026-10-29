@@ -7,16 +7,22 @@ from copy import deepcopy
 from .config import ConfigError, integer, string
 
 CARD_WIDTH = 640
+MIN_WIDTH = 480
+MAX_WIDTH = 1600
+MIN_HEIGHT = 0
+MAX_HEIGHT = 4000
 COORD_MIN = -80
-COORD_MAX_X = 720
-COORD_MAX_Y = 4000
 NOTE_MAX = 80
+BADGE_MAX = 24
+CUSTOM_TEXT_MAX = 40
+MAX_CUSTOMS = 8
 
 _ELEMENT = (
     ("kicker", "左上角 CS2 标签", "页眉"),
     ("title", "标题", "页眉"),
     ("context", "页眉右侧赛事信息", "页眉"),
     ("timestamp", "播报时间", "页眉"),
+    ("extra_badge", "自定义角标", "页眉"),
     ("left_logo", "左侧队标", "对阵"),
     ("right_logo", "右侧队标", "对阵"),
     ("left_name", "左侧队名", "对阵"),
@@ -40,46 +46,41 @@ _ELEMENT = (
 )
 
 _BY_ID = {item[0]: item for item in _ELEMENT}
+_SKIP_KEYS = {"note", "badge", "elements", "width", "height", "customs"}
+_BASE = ("kicker", "title", "extra_badge", "extra_note", "footer_brand", "footer_tag")
 
 CARD_TYPES = {
     "daily": {
         "label": "赛程日报",
-        "elements": (
-            "kicker", "title", "timestamp", "event_name", "day_group",
+        "elements": _BASE + (
+            "timestamp", "event_name", "day_group",
             "match_time", "match_logos", "match_names", "match_vs", "match_bo",
-            "extra_note", "footer_brand", "footer_tag",
         ),
     },
     "reminder": {
         "label": "赛前提醒",
-        "elements": (
-            "kicker", "title", "context", "left_logo", "right_logo",
-            "left_name", "right_name", "center", "start_time", "timezone",
-            "extra_note", "footer_brand", "footer_tag",
+        "elements": _BASE + (
+            "context", "left_logo", "right_logo", "left_name", "right_name",
+            "center", "start_time", "timezone",
         ),
     },
     "result": {
         "label": "赛事结果",
-        "elements": (
-            "kicker", "title", "context", "left_logo", "right_logo",
-            "left_name", "right_name", "center", "round_marks",
-            "extra_note", "footer_brand", "footer_tag",
+        "elements": _BASE + (
+            "context", "left_logo", "right_logo", "left_name", "right_name",
+            "center", "round_marks",
         ),
     },
     "reschedule": {
         "label": "赛程变更",
-        "elements": (
-            "kicker", "title", "context", "left_logo", "right_logo",
-            "left_name", "right_name", "center", "start_time", "timezone",
-            "extra_note", "footer_brand", "footer_tag",
+        "elements": _BASE + (
+            "context", "left_logo", "right_logo", "left_name", "right_name",
+            "center", "start_time", "timezone",
         ),
     },
     "tournament": {
         "label": "赛事开幕",
-        "elements": (
-            "kicker", "title", "body", "team_gallery",
-            "extra_note", "footer_brand", "footer_tag",
-        ),
+        "elements": _BASE + ("body", "team_gallery"),
     },
 }
 
@@ -107,17 +108,31 @@ def catalog() -> dict:
                 for name in spec["elements"]
             ],
         }
-    return cards
+    return {
+        "cards": cards,
+        "canvas": {
+            "min_width": MIN_WIDTH,
+            "max_width": MAX_WIDTH,
+            "min_height": MIN_HEIGHT,
+            "max_height": MAX_HEIGHT,
+            "default_width": CARD_WIDTH,
+            "max_customs": MAX_CUSTOMS,
+        },
+    }
 
 
 def default_card(kind: str) -> dict:
     spec = CARD_TYPES[kind]
     return {
         "note": "",
+        "badge": "",
+        "width": CARD_WIDTH,
+        "height": 0,
         "elements": {
             name: {"visible": True, "x": None, "y": None}
             for name in spec["elements"]
         },
+        "customs": [],
     }
 
 
@@ -139,9 +154,39 @@ def _element_state(value, name: str) -> dict:
         raise ConfigError(f"{name}.visible must be a boolean")
     return {
         "visible": visible,
-        "x": _coord(value.get("x"), f"{name}.x", COORD_MAX_X),
-        "y": _coord(value.get("y"), f"{name}.y", COORD_MAX_Y),
+        "x": _coord(value.get("x"), f"{name}.x", MAX_WIDTH + 80),
+        "y": _coord(value.get("y"), f"{name}.y", MAX_HEIGHT),
     }
+
+
+def _customs(value, name: str) -> list[dict]:
+    if not isinstance(value, list):
+        raise ConfigError(f"{name} must be a list")
+    if len(value) > MAX_CUSTOMS:
+        raise ConfigError(f"{name} supports at most {MAX_CUSTOMS} items")
+    result = []
+    used = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ConfigError(f"{name}[{index}] must be an object")
+        ident = string(item.get("id") or f"custom_{index + 1}", f"{name}[{index}].id", nonempty=True)
+        if not ident.startswith("custom_") or ident in used:
+            raise ConfigError(f"{name}[{index}].id is invalid")
+        used.add(ident)
+        text = string(item.get("text") or "", f"{name}[{index}].text")
+        if len(text) > CUSTOM_TEXT_MAX:
+            raise ConfigError(f"{name}[{index}].text is too long")
+        visible = item.get("visible", True)
+        if not isinstance(visible, bool):
+            raise ConfigError(f"{name}[{index}].visible must be a boolean")
+        result.append({
+            "id": ident,
+            "text": text,
+            "visible": visible,
+            "x": _coord(item.get("x"), f"{name}[{index}].x", MAX_WIDTH + 80),
+            "y": _coord(item.get("y"), f"{name}[{index}].y", MAX_HEIGHT),
+        })
+    return result
 
 
 def validate_card_layout(value) -> dict:
@@ -149,8 +194,11 @@ def validate_card_layout(value) -> dict:
         return default_layout()
     if not isinstance(value, dict):
         raise ConfigError("card_layout must be an object")
+    incoming_cards = value.get("cards") if isinstance(value.get("cards"), dict) else value
     result = default_layout()
-    for kind, incoming in value.items():
+    for kind, incoming in incoming_cards.items():
+        if kind in {"cards", "canvas"}:
+            continue
         if kind not in CARD_TYPES:
             raise ConfigError(f"unknown card type: {kind}")
         if not isinstance(incoming, dict):
@@ -160,9 +208,19 @@ def validate_card_layout(value) -> dict:
             card["note"] = string(incoming.get("note") or "", f"card_layout.{kind}.note")
             if len(card["note"]) > NOTE_MAX:
                 raise ConfigError(f"card_layout.{kind}.note is too long")
+        if "badge" in incoming:
+            card["badge"] = string(incoming.get("badge") or "", f"card_layout.{kind}.badge")
+            if len(card["badge"]) > BADGE_MAX:
+                raise ConfigError(f"card_layout.{kind}.badge is too long")
+        if "width" in incoming:
+            card["width"] = integer(incoming.get("width") or CARD_WIDTH, f"card_layout.{kind}.width", MIN_WIDTH, MAX_WIDTH)
+        if "height" in incoming:
+            card["height"] = integer(incoming.get("height") or 0, f"card_layout.{kind}.height", MIN_HEIGHT, MAX_HEIGHT)
+        if "customs" in incoming:
+            card["customs"] = _customs(incoming.get("customs"), f"card_layout.{kind}.customs")
         elements = incoming.get("elements")
         if elements is None:
-            elements = {key: value for key, value in incoming.items() if key != "note"}
+            elements = {key: item for key, item in incoming.items() if key not in _SKIP_KEYS}
         if not isinstance(elements, dict):
             raise ConfigError(f"card_layout.{kind}.elements must be an object")
         allowed = set(CARD_TYPES[kind]["elements"])

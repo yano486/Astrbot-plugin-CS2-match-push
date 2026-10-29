@@ -145,7 +145,8 @@ class BannerRenderer:
         while body and not body[-1]:
             body.pop()
 
-        width, padding = 640, 38
+        width = int(layout_spec.get("width") or 640)
+        padding = 38
         ink, muted, gold = "#132033", "#405369", "#405369"
         background, rule = "#f4f6f9", "#d3dce7"
         measure = ImageDraw.Draw(PILImage.new("RGB", (width, 1)))
@@ -168,7 +169,7 @@ class BannerRenderer:
         show = lambda name: self._layout_show(layout_spec, name)
         title_draw_rows = title_rows if show("title") else []
         context_draw_rows = context_rows if show("context") else []
-        header_on = show("kicker") or bool(title_draw_rows) or bool(context_draw_rows)
+        header_on = show("kicker") or show("extra_badge") or bool(title_draw_rows) or bool(context_draw_rows)
         header_height = max(
             96,
             title_y + len(title_draw_rows) * 29 + 15,
@@ -263,6 +264,10 @@ class BannerRenderer:
                                 "centered": False, "bold": False, "icon": None})
         footer_on = show("footer_brand") or show("footer_tag")
         height = cursor + sum(item[1] if isinstance(item, tuple) else item.get("height", 27) for item in wrapped) + (55 if footer_on else 16)
+        customs = [item for item in (layout_spec.get("customs") or []) if item.get("visible", True) and str(item.get("text") or "").strip()]
+        if customs:
+            height = max(height, max(int(item.get("y") or 0) + 36 for item in customs) + 16)
+        height = max(height, int(layout_spec.get("height") or 0))
         image = PILImage.new("RGB", (width, height), background)
         draw = ImageDraw.Draw(image)
         if header_on:
@@ -271,6 +276,10 @@ class BannerRenderer:
         if show("kicker"):
             x, y = self._layout_xy(layout_spec, "kicker", padding, 23)
             self._draw_card_text(draw, "CS2", x, y, self._pick_banner_font(16), "#ff8a70")
+        badge = str(layout_spec.get("badge") or "").strip()
+        if badge and show("extra_badge"):
+            x, y = self._layout_xy(layout_spec, "extra_badge", width - padding - 110, 18)
+            self._draw_card_text(draw, badge, x, y, label_font, "#ff8a70")
         if test_mode:
             self._draw_card_text(draw, "测试推送", width - padding - 48, 18, label_font, "#ff8a70")
         for index, row in enumerate(title_draw_rows):
@@ -388,6 +397,10 @@ class BannerRenderer:
             if show("footer_tag"):
                 x, y = self._layout_xy(layout_spec, "footer_tag", width - padding - 72, height - 30)
                 self._draw_card_text(draw, "比赛已结束" if is_result else "赛事资讯", x, y, label_font, muted)
+        for item in customs:
+            x = int(item["x"] if item.get("x") is not None else padding)
+            y = int(item["y"] if item.get("y") is not None else height - 80)
+            self._draw_card_text(draw, str(item.get("text") or ""), x, y, detail_font, ink)
         image.save(output_path, format="PNG", optimize=True)
         return output_path
 
