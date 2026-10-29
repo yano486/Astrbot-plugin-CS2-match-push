@@ -1401,6 +1401,7 @@ class CSMatchPlugin(Star):
             self._banner_renderer.render_notification, text, self._new_notice_path(),
             logo_images=images, team_names=names, center_text=center_text,
             start_time=start_time, team_marks=marks, round_winners=round_winners, winner_index=winner_index,
+            layout=self.store.get("card_layout"),
         )
         _, _, Image = self._message_component_types()
         image = self._make_image_file_component(Image, path)

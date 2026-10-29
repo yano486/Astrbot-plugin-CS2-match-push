@@ -57,6 +57,7 @@ class DataStore:
         "tournament_announce_enabled": True,
         "tournament_announce_hours":   2,
         "image_push_enabled":          True,
+        "card_layout":                 {},
         "test_mode_enabled":           False,
         "test_target_type":            "private",
         "test_target_id":              "",

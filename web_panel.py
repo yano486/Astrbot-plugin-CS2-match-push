@@ -18,6 +18,7 @@ from yarl import URL
 
 from astrbot.api import logger
 
+from .card_layout import CARD_TYPES, catalog, default_layout, validate_card_layout
 from .config import ConfigError, SOURCE_DEFAULTS, integer, source_id, sources_configured, string, validate_config
 from .data_sources import SourceRouter
 from .delivery import DeliveryError
@@ -186,6 +187,9 @@ class WebPanel:
         # 单场比赛：自定义提醒时间 & 手动重建
         a.add_patch("/api/matches/{mid}",       self.patch_match)
         a.add_post("/api/matches/{mid}/rebuild",self.rebuild_match)
+        a.add_get("/api/card-layout",           self.get_card_layout)
+        a.add_post("/api/card-layout",          self.save_card_layout)
+        a.add_post("/api/card-layout/preview",  self.preview_card_layout)
 
     def _json(self, data: dict, status=200):
         return web.Response(
@@ -476,7 +480,44 @@ class WebPanel:
         now = datetime.now(CST).strftime("%H:%M:%S")
         self._logs.append({"time": now, "level": level, "msg": msg})
 
+    async def get_card_layout(self, req):
+        layout = validate_card_layout(self.plugin.store.get("card_layout") or {})
+        return self._json({"ok": True, "catalog": catalog(), "layout": layout, "defaults": default_layout()})
+
+    async def save_card_layout(self, req):
+        body = await self._body(req)
+        layout = validate_card_layout(body.get("layout") if isinstance(body.get("layout"), dict) else body)
+        self.plugin.store.import_config({"card_layout": layout})
+        return self._json({"ok": True, "layout": layout})
+
+    async def preview_card_layout(self, req):
+        import base64
+        import os
+        import tempfile
+        body = await self._body(req)
+        kind = string(body.get("type") or "daily", "type")
+        if kind not in CARD_TYPES:
+            raise ConfigError("unknown card type")
+        card = body.get("card")
+        saved = self.plugin.store.get("card_layout") or {}
+        if isinstance(card, dict):
+            saved = validate_card_layout({**validate_card_layout(saved), kind: card})
+        else:
+            saved = validate_card_layout(saved)
+        fd, path = tempfile.mkstemp(prefix="cs2-card-", suffix=".png")
+        os.close(fd)
+        try:
+            self.plugin._banner_renderer.render_preview(kind, saved, path)
+            data = base64.b64encode(Path(path).read_bytes()).decode("ascii")
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return self._json({"ok": True, "type": kind, "image": f"data:image/png;base64,{data}"})
+
     async def start(self, host: str, port: int):
+
         await self.reconfigure(True, host, port)
 
     async def stop(self):

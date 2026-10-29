@@ -9,6 +9,41 @@ from astrbot.api import logger
 
 
 class BannerRenderer:
+    @staticmethod
+    def _layout_show(spec, name) -> bool:
+        item = ((spec or {}).get("elements") or {}).get(name)
+        if item is None:
+            return True
+        return bool(item.get("visible", True))
+
+    @staticmethod
+    def _layout_xy(spec, name, default_x, default_y):
+        item = ((spec or {}).get("elements") or {}).get(name) or {}
+        x = item.get("x")
+        y = item.get("y")
+        return (
+            default_x if x is None else int(x),
+            default_y if y is None else int(y),
+        )
+
+    def render_preview(self, kind: str, layout, output_path: str) -> str:
+        from .card_layout import sample_notification
+        sample = sample_notification(kind)
+        card = layout if isinstance(layout, dict) and "elements" in layout else None
+        saved = {kind: card} if card is not None else layout
+        return self.render_notification(
+            sample["text"],
+            output_path,
+            logo_images=sample.get("logo_images"),
+            team_names=sample.get("team_names"),
+            center_text=sample.get("center_text", "VS"),
+            start_time=sample.get("start_time", ""),
+            team_marks=sample.get("team_marks"),
+            round_winners=sample.get("round_winners"),
+            winner_index=sample.get("winner_index"),
+            layout=saved,
+        )
+
     def render_notification(
         self,
         text: str,
@@ -22,6 +57,7 @@ class BannerRenderer:
         team_marks: list[dict] | None = None,
         round_winners: list[int] | None = None,
         winner_index: int | None = None,
+        layout=None,
     ) -> str:
         """Render one compact editorial card; delivery failures propagate.
 
@@ -52,6 +88,8 @@ class BannerRenderer:
             elif title and lines[0] == self._notification_text(title):
                 lines.pop(0)
         title = self._notification_text(title or "CS2 赛事推送")
+        from .card_layout import resolve_card_layout
+        layout_spec = resolve_card_layout(layout, title)
         is_result = has_matchup and "赛事结果" in title
         if is_result and winner_index is None:
             scores = re.fullmatch(r"\s*(\d+)\s*:\s*(\d+)\s*", str(center_text))
@@ -127,7 +165,15 @@ class BannerRenderer:
         context_rows = self._wrap_notification_text(measure, header_context, detail_font, 236) if header_context else []
         title_rows = self._wrap_notification_text(measure, title, title_font, 300 if context_rows else width - 2 * padding)
         title_y = 53
-        header_height = max(96, title_y + len(title_rows) * 29 + 15, 35 + len(context_rows) * 22 + 15)
+        show = lambda name: self._layout_show(layout_spec, name)
+        title_draw_rows = title_rows if show("title") else []
+        context_draw_rows = context_rows if show("context") else []
+        header_on = show("kicker") or bool(title_draw_rows) or bool(context_draw_rows)
+        header_height = max(
+            96,
+            title_y + len(title_draw_rows) * 29 + 15,
+            35 + len(context_draw_rows) * 22 + 15,
+        ) if header_on else 0
         cursor = header_height + 16
         matchup = None
         if has_matchup:
@@ -163,12 +209,18 @@ class BannerRenderer:
                                 "height": max(42, 20 * max(len(left_rows), len(right_rows)) + 10)})
                 continue
             if is_daily and line.startswith("赛事："):
+                if not show("event_name"):
+                    continue
                 wrapped.append(("", 9, body_font, 0, muted, False, False))
                 for row in self._wrap_notification_text(measure, line[3:], body_font, width - 2 * padding):
-                    wrapped.append((row, 29, body_font, 0, ink, False, False))
+                    wrapped.append({"kind": "text", "role": "event_name", "row": row, "height": 29,
+                                    "font": body_font, "indent": 0, "color": ink,
+                                    "centered": False, "bold": False, "icon": None})
                 continue
             participants = re.match(r"^参赛战队[：:]\s*(.+)$", line)
             if participants:
+                if not show("team_gallery"):
+                    continue
                 entries = [entry.strip() for entry in re.split(r"[、,，]", participants.group(1)) if entry.strip()]
                 if entries:
                     gallery_entries = [(name, marks.get(self._team_key(name))) for name in entries]
@@ -177,6 +229,13 @@ class BannerRenderer:
                                     "height": self._team_gallery_height(measure, gallery_entries, detail_font)})
                     continue
             day_group = bool(is_daily and re.match(r"^(?:今天|明天|\d{2}-\d{2})[（(]", line))
+            if day_group and not show("day_group"):
+                continue
+            if is_daily and "播报" in line and not show("timestamp"):
+                continue
+            if not is_daily and not show("body") and not day_group:
+                if not re.match(r"^(?:胜者|弃权|平局|原定|调整)[：:]?", line):
+                    continue
             detail = bool(re.match(r"^第\d+局[：:]|^各局详情[：:]|暂无详细数据", line))
             prominent = bool(re.match(r"^(?:胜者|弃权|平局|原定|调整)[：:]?", line))
             centered = has_matchup and not detail and not prominent
@@ -189,47 +248,65 @@ class BannerRenderer:
             icon_mark = (marks.get(self._team_key(winner.group(1))) or
                          {"name": winner.group(1), "image": None}) if winner else (matched_mark[1] if matched_mark else None)
             rows = self._wrap_notification_text(measure, line, font, width - 2 * padding - (34 if icon_mark else 0))
+            role = "day_group" if day_group else "timestamp" if is_daily and "播报" in line else "body"
             for row in rows:
-                wrapped.append({"kind": "text", "row": row, "height": 27 if not detail else 25,
+                wrapped.append({"kind": "text", "role": role, "row": row, "height": 27 if not detail else 25,
                                 "font": font, "indent": 34 if icon_mark else 0,
                                 "color": color, "centered": centered and not icon_mark, "bold": False,
                                 "icon": icon_mark})
-        height = cursor + sum(item[1] if isinstance(item, tuple) else item.get("height", 27) for item in wrapped) + 55
+        note = str(layout_spec.get("note") or "").strip()
+        if note and show("extra_note"):
+            wrapped.append(("", 12, body_font, 0, muted, False, False))
+            for row in self._wrap_notification_text(measure, note, detail_font, width - 2 * padding):
+                wrapped.append({"kind": "text", "role": "extra_note", "row": row, "height": 26,
+                                "font": detail_font, "indent": 0, "color": muted,
+                                "centered": False, "bold": False, "icon": None})
+        footer_on = show("footer_brand") or show("footer_tag")
+        height = cursor + sum(item[1] if isinstance(item, tuple) else item.get("height", 27) for item in wrapped) + (55 if footer_on else 16)
         image = PILImage.new("RGB", (width, height), background)
         draw = ImageDraw.Draw(image)
-        draw.rectangle((0, 0, width, header_height), fill="#132033")
-        draw.rectangle((0, 0, 8, header_height), fill="#ff6848")
-        self._draw_card_text(draw, "CS2", padding, 23, self._pick_banner_font(16), "#ff8a70")
+        if header_on:
+            draw.rectangle((0, 0, width, header_height), fill="#132033")
+            draw.rectangle((0, 0, 8, header_height), fill="#ff6848")
+        if show("kicker"):
+            x, y = self._layout_xy(layout_spec, "kicker", padding, 23)
+            self._draw_card_text(draw, "CS2", x, y, self._pick_banner_font(16), "#ff8a70")
         if test_mode:
             self._draw_card_text(draw, "测试推送", width - padding - 48, 18, label_font, "#ff8a70")
-        for index, row in enumerate(title_rows):
-            self._draw_card_text(draw, row, padding, title_y + index * 29, title_font, "#ffffff")
-        for index, row in enumerate(context_rows):
-            self._draw_card_text(draw, row, width - padding - 236, 35 + index * 22, detail_font, "#dce5f0")
+        for index, row in enumerate(title_draw_rows):
+            x, y = self._layout_xy(layout_spec, "title", padding, title_y + index * 29)
+            self._draw_card_text(draw, row, x, y, title_font, "#ffffff")
+        for index, row in enumerate(context_draw_rows):
+            x, y = self._layout_xy(layout_spec, "context", width - padding - 236, 35 + index * 22)
+            self._draw_card_text(draw, row, x, y, detail_font, "#dce5f0")
         if matchup:
             top, match_height, name_rows, name_font, score_rows, score_font = matchup
             logo_y = top + 7
             for index, center_x in enumerate((153, 487)):
+                side = "left" if index == 0 else "right"
                 data = (logo_images or [])[index] if index < len(logo_images or []) else None
-                logo = self._notification_logo(data, 76)
-                if logo is not None:
-                    # Bright marks, including yellow ones, need a dark plate.
-                    alpha = logo.getchannel("A")
-                    rgb = logo.convert("RGB")
-                    pale = sum(channel * weight for channel, weight in zip(
-                        ImageStat.Stat(rgb, mask=alpha).mean,
-                        (0.2126, 0.7152, 0.0722))) > 175
-                    if pale:
-                        draw.ellipse((center_x - 44, logo_y - 6, center_x + 44, logo_y + 82), fill="#333a40")
-                    image.paste(logo, (center_x - logo.width // 2, logo_y + (76 - logo.height) // 2), alpha)
-                else:
-                    draw.ellipse((center_x - 33, logo_y + 5, center_x + 33, logo_y + 71), outline=rule, width=1)
-                    initial = self._banner_placeholder_text(names[index])
-                    initial_font = self._fit_banner_font(draw, initial, 50, 22, 12)
-                    self._draw_card_text(draw, initial, center_x, logo_y + 28, initial_font, gold, centered=True)
-                for row_index, row in enumerate(name_rows[index]):
-                    self._draw_card_text(draw, row, center_x, top + 105 + row_index * 25, name_font, ink, centered=True)
-                if is_result and game_outcomes and index == winner_index:
+                if show(f"{side}_logo"):
+                    x, y = self._layout_xy(layout_spec, f"{side}_logo", center_x, logo_y)
+                    logo = self._notification_logo(data, 76)
+                    if logo is not None:
+                        alpha = logo.getchannel("A")
+                        rgb = logo.convert("RGB")
+                        pale = sum(channel * weight for channel, weight in zip(
+                            ImageStat.Stat(rgb, mask=alpha).mean,
+                            (0.2126, 0.7152, 0.0722))) > 175
+                        if pale:
+                            draw.ellipse((x - 44, y - 6, x + 44, y + 82), fill="#333a40")
+                        image.paste(logo, (x - logo.width // 2, y + (76 - logo.height) // 2), alpha)
+                    else:
+                        draw.ellipse((x - 33, y + 5, x + 33, y + 71), outline=rule, width=1)
+                        initial = self._banner_placeholder_text(names[index])
+                        initial_font = self._fit_banner_font(draw, initial, 50, 22, 12)
+                        self._draw_card_text(draw, initial, x, y + 28, initial_font, gold, centered=True)
+                if show(f"{side}_name"):
+                    for row_index, row in enumerate(name_rows[index]):
+                        x, y = self._layout_xy(layout_spec, f"{side}_name", center_x, top + 105 + row_index * 25)
+                        self._draw_card_text(draw, row, x, y, name_font, ink, centered=True)
+                if is_result and game_outcomes and index == winner_index and show("round_marks"):
                     symbols = " ".join("✓" if winner == index else "✗" if winner in (0, 1) else "?" for winner in game_outcomes)
                     symbol_font = self._pick_result_symbol_font(22)
                     for symbol_size in range(22, 11, -1):
@@ -237,16 +314,23 @@ class BannerRenderer:
                         symbol_box = draw.textbbox((0, 0), symbols, font=symbol_font)
                         if symbol_box[2] - symbol_box[0] <= 198:
                             break
-                    self._draw_card_text(draw, symbols, center_x, top + 110 + 25 * len(name_rows[index]), symbol_font, "#000000", centered=True)
+                    x, y = self._layout_xy(layout_spec, "round_marks", center_x, top + 110 + 25 * len(name_rows[index]))
+                    self._draw_card_text(draw, symbols, x, y, symbol_font, "#000000", centered=True)
             score_top = top + (34 if is_result else 14)
-            for index, row in enumerate(score_rows):
-                self._draw_card_text(draw, row, width // 2, score_top + index * 32, score_font, ink if is_result else muted, centered=True, bold=is_result)
+            if show("center"):
+                for index, row in enumerate(score_rows):
+                    x, y = self._layout_xy(layout_spec, "center", width // 2, score_top + index * 32)
+                    self._draw_card_text(draw, row, x, y, score_font, ink if is_result else muted, centered=True, bold=is_result)
             if display_time:
                 time_y = score_top + (48 if is_result else 32) * len(score_rows) + 8
                 shown_time = time_transition or display_time
                 time_font = self._fit_banner_font(draw, shown_time, 180, 24, 16) if time_transition else self._pick_banner_font(34)
-                self._draw_card_text(draw, shown_time, width // 2, time_y, time_font, ink, centered=True, bold=not bool(time_transition))
-                self._draw_card_text(draw, "北京时间", width // 2, time_y + 45, label_font, gold, centered=True)
+                if show("start_time"):
+                    x, y = self._layout_xy(layout_spec, "start_time", width // 2, time_y)
+                    self._draw_card_text(draw, shown_time, x, y, time_font, ink, centered=True, bold=not bool(time_transition))
+                if show("timezone"):
+                    x, y = self._layout_xy(layout_spec, "timezone", width // 2, time_y + 45)
+                    self._draw_card_text(draw, "北京时间", x, y, label_font, gold, centered=True)
         for item in wrapped:
             if isinstance(item, tuple):
                 row, row_height, font, indent, color, centered, bold = item
@@ -256,18 +340,26 @@ class BannerRenderer:
                 continue
             if item["kind"] == "schedule":
                 row_height = item["height"]
-                self._draw_card_text(draw, item["time"], padding, cursor + 8, detail_font, gold)
+                if show("match_time"):
+                    x, y = self._layout_xy(layout_spec, "match_time", padding, cursor + 8)
+                    self._draw_card_text(draw, item["time"], x, y, detail_font, gold)
                 left_edge = width // 2 - 24
-                self._draw_small_mark(image, draw, left_edge - 24, cursor + 5, item["left_mark"], 24, item["left"])
-                for index, row in enumerate(item["left_rows"]):
-                    text_box = draw.textbbox((0, 0), row, font=body_font)
-                    self._draw_card_text(draw, row, left_edge - 31 - (text_box[2] - text_box[0]), cursor + 6 + index * 19, body_font, ink)
-                self._draw_card_text(draw, "vs", width // 2, cursor + 8, label_font, muted, centered=True)
+                if show("match_logos"):
+                    self._draw_small_mark(image, draw, left_edge - 24, cursor + 5, item["left_mark"], 24, item["left"])
+                if show("match_names"):
+                    for index, row in enumerate(item["left_rows"]):
+                        text_box = draw.textbbox((0, 0), row, font=body_font)
+                        self._draw_card_text(draw, row, left_edge - 31 - (text_box[2] - text_box[0]), cursor + 6 + index * 19, body_font, ink)
+                if show("match_vs"):
+                    self._draw_card_text(draw, "vs", width // 2, cursor + 8, label_font, muted, centered=True)
                 right_edge = width // 2 + 24
-                self._draw_small_mark(image, draw, right_edge, cursor + 5, item["right_mark"], 24, item["right"])
-                for index, row in enumerate(item["right_rows"]):
-                    self._draw_card_text(draw, row, right_edge + 31, cursor + 6 + index * 19, body_font, ink)
-                self._draw_card_text(draw, item["detail_rows"][0], width - padding - 32, cursor + 8, label_font, muted)
+                if show("match_logos"):
+                    self._draw_small_mark(image, draw, right_edge, cursor + 5, item["right_mark"], 24, item["right"])
+                if show("match_names"):
+                    for index, row in enumerate(item["right_rows"]):
+                        self._draw_card_text(draw, row, right_edge + 31, cursor + 6 + index * 19, body_font, ink)
+                if show("match_bo"):
+                    self._draw_card_text(draw, item["detail_rows"][0], width - padding - 32, cursor + 8, label_font, muted)
                 cursor += row_height
                 continue
             if item["kind"] == "gallery":
@@ -276,12 +368,26 @@ class BannerRenderer:
             if item.get("icon"):
                 self._draw_small_mark(image, draw, padding, cursor + 2, item["icon"], 25, item.get("row", "?"))
             row = item["row"]
+            role = item.get("role")
+            if role and not show(role) and role in {"event_name", "day_group", "timestamp", "body", "extra_note"}:
+                cursor += item["height"]
+                continue
             if row:
-                self._draw_card_text(draw, row, width // 2 if item["centered"] else padding + item["indent"], cursor, item["font"], item["color"], centered=item["centered"], bold=item["bold"])
+                default_x = width // 2 if item["centered"] else padding + item["indent"]
+                if role in {"extra_note", "event_name", "timestamp"}:
+                    x, y = self._layout_xy(layout_spec, role, default_x, cursor)
+                    self._draw_card_text(draw, row, x, y, item["font"], item["color"], centered=item["centered"], bold=item["bold"])
+                else:
+                    self._draw_card_text(draw, row, default_x, cursor, item["font"], item["color"], centered=item["centered"], bold=item["bold"])
             cursor += item["height"]
-        draw.rectangle((0, height - 50, width, height), fill="#e5ebf2")
-        self._draw_card_text(draw, "CS2 比赛推送", padding, height - 30, label_font, muted)
-        self._draw_card_text(draw, "比赛已结束" if is_result else "赛事资讯", width - padding - 72, height - 30, label_font, muted)
+        if footer_on:
+            draw.rectangle((0, height - 50, width, height), fill="#e5ebf2")
+            if show("footer_brand"):
+                x, y = self._layout_xy(layout_spec, "footer_brand", padding, height - 30)
+                self._draw_card_text(draw, "CS2 比赛推送", x, y, label_font, muted)
+            if show("footer_tag"):
+                x, y = self._layout_xy(layout_spec, "footer_tag", width - padding - 72, height - 30)
+                self._draw_card_text(draw, "比赛已结束" if is_result else "赛事资讯", x, y, label_font, muted)
         image.save(output_path, format="PNG", optimize=True)
         return output_path
 

@@ -132,6 +132,16 @@
           推送设置<span class="tab-dirty" hidden>●</span>
         </button>
         <button
+          id="tab-layout"
+          role="tab"
+          aria-controls="layout"
+          aria-selected="false"
+          tabindex="-1"
+          data-tab="layout"
+        >
+          卡片排版<span class="tab-dirty" hidden>●</span>
+        </button>
+        <button
           id="tab-advanced"
           role="tab"
           aria-controls="advanced"
@@ -481,6 +491,36 @@
             </div>
           </div>
         </form>
+      </section>
+
+      <section
+        id="layout"
+        role="tabpanel"
+        aria-labelledby="tab-layout"
+        hidden
+      >
+        <div class="section-heading">
+          <h2>推送卡片排版</h2>
+          <p>按卡片类型开关要显示的元素，并可选填写坐标。坐标留空表示沿用现在的自动排版，默认外观与当前推送图一致。</p>
+        </div>
+        <div class="card padded layout-editor">
+          <div class="layout-toolbar">
+            <label class="field">卡片类型<select id="layout-type"></select></label>
+            <div class="layout-actions">
+              <button type="button" class="button" id="layout-preview">刷新预览</button>
+              <button type="button" class="button ghost" id="layout-reset">恢复此卡默认</button>
+              <button type="button" class="button primary" id="layout-save">保存排版</button>
+            </div>
+          </div>
+          <p id="layout-status" class="muted">打开此页后会生成预览，不会向 QQ 发送消息。</p>
+          <div class="layout-workspace">
+            <div class="layout-preview-wrap"><img id="layout-preview-image" alt="卡片预览"></div>
+            <div class="layout-controls">
+              <label class="field">自定义说明文字<input id="layout-note" maxlength="80" placeholder="显示在卡片底部，可留空"></label>
+              <div id="layout-elements" class="layout-elements"></div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section

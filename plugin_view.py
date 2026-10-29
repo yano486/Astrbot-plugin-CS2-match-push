@@ -38,6 +38,9 @@ ROUTES = (
     ("POST", r"/api/tasks/rebuild", "rebuild_tasks"),
     ("PATCH", r"/api/matches/(?P<mid>(?:hltv:)?[0-9]+)", "patch_match"),
     ("POST", r"/api/matches/(?P<mid>(?:hltv:)?[0-9]+)/rebuild", "rebuild_match"),
+    ("GET", r"/api/card-layout", "get_card_layout"),
+    ("POST", r"/api/card-layout", "save_card_layout"),
+    ("POST", r"/api/card-layout/preview", "preview_card_layout"),
 )
 
 

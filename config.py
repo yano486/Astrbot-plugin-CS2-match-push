@@ -228,6 +228,9 @@ def validate_config(cfg: dict) -> dict:
             else:
                 raise ConfigError("followed_teams entries must be names or objects")
         result["followed_teams"] = teams
+    if "card_layout" in cfg:
+        from .card_layout import validate_card_layout
+        result["card_layout"] = validate_card_layout(cfg["card_layout"])
     if "custom_remind_minutes" in cfg:
         reminders = cfg["custom_remind_minutes"]
         if not isinstance(reminders, dict):

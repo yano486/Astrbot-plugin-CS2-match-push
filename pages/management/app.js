@@ -3,6 +3,7 @@ import {
   SOURCE_DEFAULTS, buildSourcePayload, isSourceConfigured, matchPath,
   matchTierLabel, renderFollowSourceBadges, renderSourceBadges, renderSourceStatus, sameSourceId, sourceCheckRows, sourceControls, sourceStatusFromMatches,
 } from './source-ui.js';
+import { installCardLayout, loadCardLayout, maybePreviewCardLayout } from './card-layout.js';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const bridge = window.AstrBotPluginView || window.AstrBotPluginPage;
@@ -305,6 +306,7 @@ async function loadConfig() {
   renderStats();
   updateDirtyIndicators();
   setupGuide?.sync();
+  loadCardLayout(api).catch((error) => console.warn(error));
 }
 
 async function saveSection(section, button) {
@@ -642,9 +644,11 @@ function activateTab(name, { focus = false } = {}) {
   });
   if (name === "advanced" && state.ready) run($("#refresh-logs"), loadLogs);
   if (name === "subscriptions" && state.ready) loadPopularTeams();
+  if (name === "layout" && state.ready) maybePreviewCardLayout(name);
 }
 
 function installEvents() {
+  installCardLayout(api);
   document.addEventListener(
     "error",
     (event) => {
