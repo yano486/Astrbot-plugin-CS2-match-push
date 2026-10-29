@@ -289,6 +289,18 @@ def fmt_finished(match: dict, followed: list = None) -> str:
         "📊 各局详情：",
         "\n".join(games_lines) if games_lines else "  暂无详细数据",
     ]
+    for team in (match.get("_player_stats") or {}).get("teams") or []:
+        lines.append(f"{team.get('name') or '?'}")
+        for player in team.get("players") or []:
+            blob = player.get("stats") or {}
+            counts = blob.get("counts") or {}
+            avg = blob.get("per_game_averages") or {}
+            rating = avg.get("hltv_game_rating")
+            rt = f"{rating:.2f}" if isinstance(rating, (int, float)) else "-"
+            lines.append(
+                f"  {player.get('name') or '?'}  {int(counts.get('kills') or 0)}-{int(counts.get('deaths') or 0)}  "
+                f"ADR {avg.get('adr') or '-'}  KAST {avg.get('kast') or '-'}  {rt}"
+            )
     return "\n".join(lines)
 
 def fmt_tournament_announce(

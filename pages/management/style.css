@@ -1234,6 +1234,37 @@ dialog p {
   background: var(--primary-soft);
   border-radius: 8px;
 }
+
+.layout-preview-frame {
+  position: relative;
+  display: block;
+}
+.layout-handles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.layout-handle {
+  position: absolute;
+  pointer-events: auto;
+  cursor: grab;
+  border: 1px dashed color-mix(in srgb, var(--primary) 70%, white);
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+  color: var(--text, #e8eef6);
+  font-size: 10px;
+  line-height: 1.1;
+  overflow: hidden;
+  padding: 2px 4px;
+  border-radius: 4px;
+  touch-action: none;
+  user-select: none;
+}
+.layout-handle.is-selected,
+.layout-handle.is-dragging {
+  cursor: grabbing;
+  z-index: 2;
+  border-style: solid;
+}
 .layout-preview-wrap img {
   cursor: crosshair;
 }

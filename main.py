@@ -1043,6 +1043,12 @@ class CSMatchPlugin(Star):
                 if result and result.get("status") == "finished":
                     if self.store.is_finished_notified(match_id):
                         return
+                    stats = await self.client.get_match_player_stats(match_id)
+                    if stats:
+                        result["_player_stats"] = stats
+                    games = await self.client.get_match_games(match_id)
+                    if games:
+                        result["games"] = games
                     followed = self.store.get_followed_team_names()
                     if await self._deliver_notification(
                         f"finished:{match_id}", lambda: self._push_finished(result, followed),
@@ -1402,6 +1408,8 @@ class CSMatchPlugin(Star):
             logo_images=images, team_names=names, center_text=center_text,
             start_time=start_time, team_marks=marks, round_winners=round_winners, winner_index=winner_index,
             layout=self.store.get("card_layout"),
+            player_stats=(match or {}).get("_player_stats"),
+            match_detail=match,
         )
         _, _, Image = self._message_component_types()
         image = self._make_image_file_component(Image, path)

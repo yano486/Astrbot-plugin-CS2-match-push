@@ -174,6 +174,20 @@ class SourceRouter:
                 return row
         return None
 
+    async def get_match_player_stats(self, match_id):
+        _canonical, remotes = self.identity.remote_ids(match_id)
+        pandascore_id = remotes.get("pandascore")
+        if pandascore_id is None or "pandascore" not in self.enabled:
+            return None
+        return await self._call("pandascore", "get_match_player_stats", pandascore_id)
+
+    async def get_match_games(self, match_id):
+        _canonical, remotes = self.identity.remote_ids(match_id)
+        pandascore_id = remotes.get("pandascore")
+        if pandascore_id is None or "pandascore" not in self.enabled:
+            return None
+        return await self._call("pandascore", "get_match_games", pandascore_id)
+
     async def search_teams(self, query, per_page=20):
         results = await asyncio.gather(*(self._call(source, "search_teams", query, per_page=per_page) for source in self.enabled))
         teams = []

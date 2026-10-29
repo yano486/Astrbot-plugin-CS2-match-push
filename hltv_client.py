@@ -99,6 +99,12 @@ class HltvClient:
         team_id, slug = identifier
         return await self._parsed(f"/team/{team_id}/{slug}", lambda html: parser.parse_team(html, team_id))
 
+    async def get_match_player_stats(self, match_id):
+        return None
+
+    async def get_match_games(self, match_id):
+        return None
+
     async def get_match_result(self, match_id):
         identifier = self._identifier(match_id)
         if identifier is None:

@@ -514,9 +514,9 @@
               <button type="button" class="button primary" id="layout-save">保存排版</button>
             </div>
           </div>
-          <p id="layout-status" class="muted">先点左侧一个元素，再点预览图，即可放到对应位置。预览不会发送到 QQ。</p>
+          <p id="layout-status" class="muted">可直接拖动预览图上的色块；也可以先点左侧元素再点图放置。预览不会发送到 QQ。</p>
           <div class="layout-workspace">
-            <div class="layout-preview-wrap"><img id="layout-preview-image" alt="卡片预览"></div>
+            <div class="layout-preview-wrap"><div class="layout-preview-frame"><img id="layout-preview-image" alt="卡片预览"><div id="layout-handles" class="layout-handles" aria-hidden="true"></div></div></div>
             <div class="layout-controls">
               <label class="field">自定义说明文字<input id="layout-note" maxlength="80" placeholder="显示在卡片底部，可留空"></label>
               <label class="field">自定义角标<input id="layout-badge" maxlength="24" placeholder="例如：关注战队"></label>

@@ -16,15 +16,26 @@ class BannerRenderer:
             return True
         return bool(item.get("visible", True))
 
-    @staticmethod
-    def _layout_xy(spec, name, default_x, default_y):
+    def _record_box(self, name, x, y, w=72, h=22, label=""):
+        if not name or name in self._layout_boxes:
+            return
+        self._layout_boxes[name] = {
+            "id": name,
+            "x": int(x),
+            "y": int(y),
+            "w": int(max(24, w)),
+            "h": int(max(16, h)),
+            "label": label or name,
+        }
+
+    def _layout_xy(self, spec, name, default_x, default_y, w=72, h=22, label=""):
         item = ((spec or {}).get("elements") or {}).get(name) or {}
         x = item.get("x")
         y = item.get("y")
-        return (
-            default_x if x is None else int(x),
-            default_y if y is None else int(y),
-        )
+        x = default_x if x is None else int(x)
+        y = default_y if y is None else int(y)
+        self._record_box(name, x, y, w, h, label)
+        return x, y
 
     def render_preview(self, kind: str, layout, output_path: str) -> str:
         from .card_layout import sample_notification
@@ -42,6 +53,8 @@ class BannerRenderer:
             round_winners=sample.get("round_winners"),
             winner_index=sample.get("winner_index"),
             layout=saved,
+            player_stats=sample.get("player_stats"),
+            match_detail=sample.get("match_detail"),
         )
 
     def render_notification(
@@ -58,6 +71,8 @@ class BannerRenderer:
         round_winners: list[int] | None = None,
         winner_index: int | None = None,
         layout=None,
+        player_stats=None,
+        match_detail=None,
     ) -> str:
         """Render one compact editorial card; delivery failures propagate.
 
@@ -90,6 +105,7 @@ class BannerRenderer:
         title = self._notification_text(title or "CS2 赛事推送")
         from .card_layout import resolve_card_layout
         layout_spec = resolve_card_layout(layout, title)
+        self._layout_boxes = {}
         is_result = has_matchup and "赛事结果" in title
         if is_result and winner_index is None:
             scores = re.fullmatch(r"\s*(\d+)\s*:\s*(\d+)\s*", str(center_text))
@@ -262,8 +278,28 @@ class BannerRenderer:
                 wrapped.append({"kind": "text", "role": "extra_note", "row": row, "height": 26,
                                 "font": detail_font, "indent": 0, "color": muted,
                                 "centered": False, "bold": False, "icon": None})
+        detail = match_detail if isinstance(match_detail, dict) else {}
+        stat_teams = self._normalize_player_stats(player_stats)
+        maps = self._map_items(detail)
+        series = self._series_line(detail, names)
+        stage = self._stage_line(detail)
+        extras_h = 0
+        if show("stage_meta") and stage:
+            extras_h += 26
+        if show("series_score") and series:
+            extras_h += 28
+        if show("map_board") and maps:
+            extras_h += 8 + 20 * len(maps)
+        side_h = 0
+        if show("left_players") and stat_teams:
+            side_h = max(side_h, 24 + 20 * len(stat_teams[0]["players"]))
+        if show("right_players") and len(stat_teams) > 1:
+            side_h = max(side_h, 24 + 20 * len(stat_teams[1]["players"]))
+        extras_h += side_h
+        if show("player_stats") and stat_teams:
+            extras_h += self._player_stats_height(stat_teams)
         footer_on = show("footer_brand") or show("footer_tag")
-        height = cursor + sum(item[1] if isinstance(item, tuple) else item.get("height", 27) for item in wrapped) + (55 if footer_on else 16)
+        height = cursor + extras_h + sum(item[1] if isinstance(item, tuple) else item.get("height", 27) for item in wrapped) + (55 if footer_on else 16)
         customs = [item for item in (layout_spec.get("customs") or []) if item.get("visible", True) and str(item.get("text") or "").strip()]
         if customs:
             height = max(height, max(int(item.get("y") or 0) + 36 for item in customs) + 16)
@@ -295,7 +331,7 @@ class BannerRenderer:
                 side = "left" if index == 0 else "right"
                 data = (logo_images or [])[index] if index < len(logo_images or []) else None
                 if show(f"{side}_logo"):
-                    x, y = self._layout_xy(layout_spec, f"{side}_logo", center_x, logo_y)
+                    x, y = self._layout_xy(layout_spec, f"{side}_logo", center_x, logo_y, 76, 76, side)
                     logo = self._notification_logo(data, 76)
                     if logo is not None:
                         alpha = logo.getchannel("A")
@@ -340,6 +376,40 @@ class BannerRenderer:
                 if show("timezone"):
                     x, y = self._layout_xy(layout_spec, "timezone", width // 2, time_y + 45)
                     self._draw_card_text(draw, "北京时间", x, y, label_font, gold, centered=True)
+        flow = cursor
+        if show("stage_meta") and stage:
+            x, y = self._layout_xy(layout_spec, "stage_meta", padding, flow)
+            h = self._draw_stage_meta(draw, stage, x, y, detail_font, muted)
+            if ((layout_spec.get("elements") or {}).get("stage_meta") or {}).get("y") is None:
+                flow = y + h
+        if show("series_score") and series:
+            x, y = self._layout_xy(layout_spec, "series_score", padding, flow)
+            h = self._draw_series_score(draw, series, x, y, width, padding, detail_font, ink)
+            if ((layout_spec.get("elements") or {}).get("series_score") or {}).get("y") is None:
+                flow = y + h
+        if show("map_board") and maps:
+            x, y = self._layout_xy(layout_spec, "map_board", padding, flow)
+            h = self._draw_map_board(draw, maps, x, y, width, padding, detail_font, label_font, ink, muted, gold)
+            if ((layout_spec.get("elements") or {}).get("map_board") or {}).get("y") is None:
+                flow = y + h
+        if show("left_players") and stat_teams:
+            x, y = self._layout_xy(layout_spec, "left_players", padding, flow, 240, 80, "左选手")
+            self._draw_player_column(draw, stat_teams[0], x, y, 240, detail_font, label_font, ink, muted, gold)
+        if show("right_players") and len(stat_teams) > 1:
+            x, y = self._layout_xy(layout_spec, "right_players", width // 2 + 8, flow, 240, 80, "右选手")
+            self._draw_player_column(draw, stat_teams[1], x, y, 240, detail_font, label_font, ink, muted, gold)
+        if (show("left_players") or show("right_players")) and stat_teams:
+            col_h = side_h or 80
+            left_auto = ((layout_spec.get("elements") or {}).get("left_players") or {}).get("y") is None
+            right_auto = ((layout_spec.get("elements") or {}).get("right_players") or {}).get("y") is None
+            if left_auto or right_auto:
+                flow += col_h
+        if show("player_stats") and stat_teams:
+            x, y = self._layout_xy(layout_spec, "player_stats", padding, flow)
+            bottom = self._draw_player_stats(image, draw, stat_teams, x, y, width, padding, detail_font, label_font, ink, muted, gold, rule)
+            if ((layout_spec.get("elements") or {}).get("player_stats") or {}).get("y") is None:
+                flow = bottom
+        cursor = flow
         for item in wrapped:
             if isinstance(item, tuple):
                 row, row_height, font, indent, color, centered, bold = item
@@ -400,9 +470,154 @@ class BannerRenderer:
         for item in customs:
             x = int(item["x"] if item.get("x") is not None else padding)
             y = int(item["y"] if item.get("y") is not None else height - 80)
-            self._draw_card_text(draw, str(item.get("text") or ""), x, y, detail_font, ink)
+            text = str(item.get("text") or "")
+            self._draw_card_text(draw, text, x, y, detail_font, ink)
+            self._record_box(str(item.get("id") or "custom"), x, y, max(48, 12 * len(text)), 24, text)
+        self.last_boxes = list(self._layout_boxes.values())
+        self.last_size = (width, height)
         image.save(output_path, format="PNG", optimize=True)
         return output_path
+
+    @staticmethod
+    def _normalize_player_stats(stats):
+        teams = []
+        if not isinstance(stats, dict):
+            return teams
+        for team in stats.get("teams") or []:
+            if not isinstance(team, dict):
+                continue
+            players = []
+            for player in team.get("players") or []:
+                if not isinstance(player, dict):
+                    continue
+                blob = player.get("stats") or {}
+                counts = blob.get("counts") or {}
+                avg = blob.get("per_game_averages") or {}
+                rating = avg.get("hltv_game_rating")
+                players.append({
+                    "name": BannerRenderer._notification_text(player.get("name") or "?"),
+                    "kd": f"{int(counts.get('kills') or 0)}-{int(counts.get('deaths') or 0)}",
+                    "adr": avg.get("adr"),
+                    "kast": avg.get("kast"),
+                    "rating": rating,
+                })
+            players.sort(key=lambda row: (row["rating"] is None, -(row["rating"] or 0)))
+            if players:
+                teams.append({
+                    "name": BannerRenderer._notification_text(team.get("name") or "?"),
+                    "players": players,
+                })
+        return teams
+
+    @staticmethod
+    def _player_stats_height(teams) -> int:
+        if not teams:
+            return 0
+        return 18 + sum(26 + 20 * len(team["players"]) + 10 for team in teams)
+
+    def _draw_player_stats(self, image, draw, teams, x, y, width, padding, detail_font, label_font, ink, muted, gold, rule):
+        cursor = y
+        col_kd = width - padding - 210
+        col_adr = width - padding - 150
+        col_kast = width - padding - 92
+        col_rt = width - padding - 8
+        for team in teams:
+            self._draw_card_text(draw, team["name"], x, cursor, detail_font, ink, bold=True)
+            self._draw_card_text(draw, "K-D", col_kd, cursor + 2, label_font, muted)
+            self._draw_card_text(draw, "ADR", col_adr, cursor + 2, label_font, muted)
+            self._draw_card_text(draw, "KAST", col_kast, cursor + 2, label_font, muted)
+            self._draw_card_text(draw, "Rating", col_rt - 36, cursor + 2, label_font, muted)
+            cursor += 24
+            for player in team["players"]:
+                rating = player["rating"]
+                color = gold if isinstance(rating, (int, float)) and rating >= 1.15 else ink
+                self._draw_card_text(draw, player["name"][:18], x, cursor, detail_font, ink)
+                self._draw_card_text(draw, player["kd"], col_kd, cursor, detail_font, muted)
+                adr = f"{player['adr']:.1f}" if isinstance(player["adr"], (int, float)) else "-"
+                kast = f"{player['kast']:.0f}%" if isinstance(player["kast"], (int, float)) else "-"
+                rt = f"{rating:.2f}" if isinstance(rating, (int, float)) else "-"
+                self._draw_card_text(draw, adr, col_adr, cursor, detail_font, muted)
+                self._draw_card_text(draw, kast, col_kast, cursor, detail_font, muted)
+                self._draw_card_text(draw, rt, col_rt - 36, cursor, detail_font, color)
+                cursor += 20
+            cursor += 10
+        self._record_box("player_stats", x, y, width - 2 * padding, max(24, cursor - y), "选手数据")
+        return cursor
+
+    @staticmethod
+    def _stage_line(match) -> str:
+        if not isinstance(match, dict):
+            return ""
+        tour = (match.get("tournament") or {}).get("name") or (match.get("league") or {}).get("name") or ""
+        stage = match.get("name") or ""
+        bo = match.get("number_of_games") or 0
+        parts = [part for part in (tour, stage, f"BO{bo}" if bo else "") if part]
+        return " · ".join(parts)
+
+    @staticmethod
+    def _series_line(match, names) -> str:
+        if not isinstance(match, dict):
+            return ""
+        scores = {item.get("team_id"): item.get("score") for item in match.get("results") or [] if isinstance(item, dict)}
+        ids = []
+        for slot in (match.get("opponents") or [])[:2]:
+            ids.append(((slot or {}).get("opponent") or {}).get("id"))
+        if len(ids) < 2 or not names or len(names) < 2:
+            return ""
+        left = scores.get(ids[0], "-")
+        right = scores.get(ids[1], "-")
+        return f"{names[0]}  {left} - {right}  {names[1]}"
+
+    @staticmethod
+    def _map_items(match) -> list:
+        items = []
+        if not isinstance(match, dict):
+            return items
+        for game in sorted(match.get("games") or [], key=lambda item: item.get("position") or 0):
+            if not isinstance(game, dict):
+                continue
+            map_name = (game.get("map") or {}).get("name") or game.get("name") or f"Map {game.get('position') or '?'}"
+            scores = {item.get("team_id"): item.get("score") for item in game.get("results") or [] if isinstance(item, dict)}
+            ids = [((slot or {}).get("opponent") or {}).get("id") for slot in (match.get("opponents") or [])[:2]]
+            if len(ids) == 2 and ids[0] in scores and ids[1] in scores:
+                score_text = f"{scores[ids[0]]}-{scores[ids[1]]}"
+            else:
+                score_text = "待定" if game.get("status") != "finished" else "完赛"
+            items.append({"name": map_name, "score": score_text, "finished": game.get("status") == "finished"})
+        return items
+
+    def _draw_stage_meta(self, draw, text, x, y, font, color) -> int:
+        self._draw_card_text(draw, text, x, y, font, color)
+        return 26
+
+    def _draw_series_score(self, draw, text, x, y, width, padding, font, color) -> int:
+        self._draw_card_text(draw, text, x, y, font, color, bold=True)
+        return 28
+
+    def _draw_map_board(self, draw, maps, x, y, width, padding, font, label_font, ink, muted, gold) -> int:
+        cursor = y
+        for item in maps:
+            color = ink if item["finished"] else muted
+            self._draw_card_text(draw, item["name"], x, cursor, font, color)
+            self._draw_card_text(draw, item["score"], width - padding - 70, cursor, label_font, gold if item["finished"] else muted)
+            cursor += 20
+        return max(20, cursor - y)
+
+    def _draw_player_column(self, draw, team, x, y, col_width, font, label_font, ink, muted, gold) -> int:
+        cursor = y
+        self._draw_card_text(draw, team["name"], x, cursor, font, ink, bold=True)
+        self._draw_card_text(draw, "K-D", x + col_width - 90, cursor + 2, label_font, muted)
+        self._draw_card_text(draw, "Rtg", x + col_width - 40, cursor + 2, label_font, muted)
+        cursor += 22
+        for player in team["players"]:
+            rating = player["rating"]
+            color = gold if isinstance(rating, (int, float)) and rating >= 1.15 else ink
+            self._draw_card_text(draw, player["name"][:14], x, cursor, font, ink)
+            self._draw_card_text(draw, player["kd"], x + col_width - 90, cursor, font, muted)
+            rt = f"{rating:.2f}" if isinstance(rating, (int, float)) else "-"
+            self._draw_card_text(draw, rt, x + col_width - 40, cursor, font, color)
+            cursor += 20
+        return cursor - y
 
     @staticmethod
     def _group_daily_events(lines):

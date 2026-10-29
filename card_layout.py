@@ -31,6 +31,12 @@ _ELEMENT = (
     ("start_time", "开赛时间", "对阵"),
     ("timezone", "北京时间标注", "对阵"),
     ("round_marks", "各局胜负标记", "对阵"),
+    ("player_stats", "选手数据总表", "正文"),
+    ("left_players", "左侧选手 K-D / Rating", "正文"),
+    ("right_players", "右侧选手 K-D / Rating", "正文"),
+    ("series_score", "系列赛比分", "正文"),
+    ("map_board", "地图比分", "正文"),
+    ("stage_meta", "赛事阶段 / BO", "正文"),
     ("event_name", "赛事名称", "正文"),
     ("day_group", "今天/明天分组", "正文"),
     ("match_time", "日报开赛时间", "正文"),
@@ -68,7 +74,7 @@ CARD_TYPES = {
         "label": "赛事结果",
         "elements": _BASE + (
             "context", "left_logo", "right_logo", "left_name", "right_name",
-            "center", "round_marks",
+            "center", "round_marks", "stage_meta", "series_score", "map_board", "player_stats", "left_players", "right_players",
         ),
     },
     "reschedule": {
@@ -121,6 +127,11 @@ def catalog() -> dict:
     }
 
 
+_DEFAULT_OFF = {
+    "extra_badge", "player_stats", "left_players", "right_players",
+    "series_score", "map_board", "stage_meta",
+}
+
 def default_card(kind: str) -> dict:
     spec = CARD_TYPES[kind]
     return {
@@ -129,7 +140,7 @@ def default_card(kind: str) -> dict:
         "width": CARD_WIDTH,
         "height": 0,
         "elements": {
-            name: {"visible": True, "x": None, "y": None}
+            name: {"visible": name not in _DEFAULT_OFF, "x": None, "y": None}
             for name in spec["elements"]
         },
         "customs": [],
@@ -270,6 +281,36 @@ def sample_notification(kind: str) -> dict:
             "team_marks": teams[:2],
             "round_winners": [0, 1, 0],
             "winner_index": 0,
+            "match_detail": {
+                "name": "Quarter-final",
+                "number_of_games": 3,
+                "tournament": {"name": "PGL Masters Bucharest 2026"},
+                "results": [{"team_id": 1, "score": 2}, {"team_id": 2, "score": 1}],
+                "opponents": [
+                    {"opponent": {"id": 1, "name": "Vitality"}},
+                    {"opponent": {"id": 2, "name": "MOUZ"}},
+                ],
+                "games": [
+                    {"position": 1, "status": "finished", "map": {"name": "Nuke"},
+                     "results": [{"team_id": 1, "score": 13}, {"team_id": 2, "score": 11}], "winner": {"id": 1}},
+                    {"position": 2, "status": "finished", "map": {"name": "Dust2"},
+                     "results": [{"team_id": 1, "score": 9}, {"team_id": 2, "score": 13}], "winner": {"id": 2}},
+                    {"position": 3, "status": "finished", "map": {"name": "Ancient"},
+                     "results": [{"team_id": 1, "score": 16}, {"team_id": 2, "score": 12}], "winner": {"id": 1}},
+                ],
+            },
+            "player_stats": {
+                "teams": [
+                    {"name": "Vitality", "players": [
+                        {"name": "ZywOo", "stats": {"counts": {"kills": 48, "deaths": 30}, "per_game_averages": {"adr": 92.1, "kast": 81.2, "hltv_game_rating": 1.42}}},
+                        {"name": "apEX", "stats": {"counts": {"kills": 31, "deaths": 36}, "per_game_averages": {"adr": 68.4, "kast": 72.0, "hltv_game_rating": 0.98}}},
+                    ]},
+                    {"name": "MOUZ", "players": [
+                        {"name": "xertioN", "stats": {"counts": {"kills": 40, "deaths": 34}, "per_game_averages": {"adr": 84.0, "kast": 74.5, "hltv_game_rating": 1.18}}},
+                        {"name": "siuhy", "stats": {"counts": {"kills": 28, "deaths": 38}, "per_game_averages": {"adr": 61.2, "kast": 69.1, "hltv_game_rating": 0.87}}},
+                    ]},
+                ]
+            },
         }
     if kind == "reschedule":
         return {

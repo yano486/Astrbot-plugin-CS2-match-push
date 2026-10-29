@@ -181,3 +181,12 @@ class PandaScoreClient:
         """查询单场比赛当前状态及结果，包括进行中、取消和延期状态。"""
         result = await self._request(f"{API_BASE}/matches/{match_id}", {})
         return result if isinstance(result, dict) else None
+
+    async def get_match_player_stats(self, match_id: int) -> dict | None:
+        """Match player stats: KD, ADR, KAST, HLTV rating. Historical plan only."""
+        result = await self._request(f"{API_BASE}/csgo/matches/{match_id}/players/stats", {})
+        return result if isinstance(result, dict) else None
+
+    async def get_match_games(self, match_id: int) -> list | None:
+        result = await self._request(f"{API_BASE}/csgo/matches/{match_id}/games", {})
+        return result if isinstance(result, list) else None

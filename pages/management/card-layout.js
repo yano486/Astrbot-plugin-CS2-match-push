@@ -12,6 +12,7 @@ let layout = {};
 let currentType = "daily";
 let selected = "";
 let previewTimer = 0;
+let lastBoxes = [];
 
 function $(selector, root = document) {
   return root.querySelector(selector);
@@ -168,8 +169,73 @@ async function refreshPreview() {
   if (image && result.image) {
     image.src = result.image;
     image.hidden = false;
+    lastBoxes = result.boxes || [];
+    if (image.complete) renderHandles();
+    else image.onload = () => renderHandles();
   }
-  setStatus(selected ? "已选中元素，点击预览图放置。" : "先点左侧一个元素，再点预览图放置。预览不会发送到 QQ。");
+  setStatus(selected ? "可拖动预览图上的色块，松手后刷新。" : "拖动色块，或先点左侧元素再点图放置。");
+}
+
+function boxLabel(id) {
+  const spec = catalog[currentType];
+  const found = spec?.elements?.find((item) => item.id === id);
+  if (found) return found.label;
+  const custom = (currentCard().customs || []).find((item) => item.id === id);
+  return custom?.text || id;
+}
+
+function renderHandles() {
+  const layer = $("#layout-handles");
+  const image = $("#layout-preview-image");
+  if (!layer || !image?.naturalWidth) return;
+  const scale = image.clientWidth / image.naturalWidth;
+  layer.innerHTML = lastBoxes
+    .map((box) => {
+      const active = selected === `el:${box.id}` || selected === `custom:${box.id}` ? " is-selected" : "";
+      return `<button type="button" class="layout-handle${active}" data-handle-id="${escaped(box.id)}"
+        style="left:${box.x * scale}px;top:${box.y * scale}px;width:${Math.max(28, box.w * scale)}px;height:${Math.max(18, box.h * scale)}px">${escaped(boxLabel(box.id))}</button>`;
+    })
+    .join("");
+}
+
+function pointerToCanvas(event, image) {
+  const rect = image.getBoundingClientRect();
+  const x = Math.round(((event.clientX - rect.left) * image.naturalWidth) / rect.width);
+  const y = Math.round(((event.clientY - rect.top) * image.naturalHeight) / rect.height);
+  return { x, y };
+}
+
+function startHandleDrag(event) {
+  const handle = event.target.closest("[data-handle-id]");
+  const image = $("#layout-preview-image");
+  if (!handle || !image?.naturalWidth) return;
+  event.preventDefault();
+  const id = handle.dataset.handleId;
+  selected = id.startsWith("custom_") ? `custom:${id}` : `el:${id}`;
+  renderElements();
+  const scale = image.clientWidth / image.naturalWidth;
+  const start = pointerToCanvas(event, image);
+  const origLeft = parseFloat(handle.style.left) || 0;
+  const origTop = parseFloat(handle.style.top) || 0;
+  let moved = false;
+  handle.classList.add("is-dragging");
+  const move = (next) => {
+    const point = pointerToCanvas(next, image);
+    const dx = (point.x - start.x) * scale;
+    const dy = (point.y - start.y) * scale;
+    if (Math.abs(point.x - start.x) + Math.abs(point.y - start.y) > 2) moved = true;
+    handle.style.left = `${origLeft + dx}px`;
+    handle.style.top = `${origTop + dy}px`;
+  };
+  const up = (next) => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    handle.classList.remove("is-dragging");
+    const point = pointerToCanvas(next, image);
+    if (moved) placeAt(Math.max(0, point.x), Math.max(0, point.y));
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
 }
 
 function schedulePreview() {
@@ -274,6 +340,7 @@ export function installCardLayout(client) {
     renderElements();
     schedulePreview();
   });
+  $("#layout-handles")?.addEventListener("pointerdown", startHandleDrag);
   $("#layout-preview-image")?.addEventListener("click", (event) => {
     const image = event.currentTarget;
     if (!image.naturalWidth || !image.clientWidth) return;
@@ -281,6 +348,7 @@ export function installCardLayout(client) {
     const y = Math.round((event.offsetY * image.naturalHeight) / image.clientHeight);
     placeAt(x, y);
   });
+  window.addEventListener("resize", () => renderHandles());
   $("#layout-preview")?.addEventListener("click", () => {
     refreshPreview().catch((error) => setStatus(error.message || "预览失败"));
   });

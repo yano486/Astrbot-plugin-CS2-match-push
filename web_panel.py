@@ -514,14 +514,24 @@ class WebPanel:
         fd, path = tempfile.mkstemp(prefix="cs2-card-", suffix=".png")
         os.close(fd)
         try:
-            self.plugin._banner_renderer.render_preview(kind, saved, path)
+            renderer = self.plugin._banner_renderer
+            renderer.render_preview(kind, saved, path)
             data = base64.b64encode(Path(path).read_bytes()).decode("ascii")
+            boxes = list(getattr(renderer, "last_boxes", []) or [])
+            size = getattr(renderer, "last_size", (0, 0)) or (0, 0)
         finally:
             try:
                 os.remove(path)
             except OSError:
                 pass
-        return self._json({"ok": True, "type": kind, "image": f"data:image/png;base64,{data}"})
+        return self._json({
+            "ok": True,
+            "type": kind,
+            "image": f"data:image/png;base64,{data}",
+            "boxes": boxes,
+            "width": size[0],
+            "height": size[1],
+        })
 
     async def start(self, host: str, port: int):
 
