@@ -35,6 +35,8 @@ class DataStore:
         "min_tiers":                   ["s", "a"],
         "notified_upcoming":           [],
         "notified_finished":           [],
+        "notified_live":               [],
+        "notified_live_maps":          {},
         "notified_tournaments":        [],
         "delivery_receipts":           {},  # event -> 已成功推送的目标，支持部分失败重试
         "match_schedules":             {},
@@ -318,9 +320,34 @@ class DataStore:
             self._data["notified_finished"] = self._data["notified_finished"][-500:]
             self.save()
 
+    def is_live_notified(self, mid) -> bool:
+        return mid in self._data.get("notified_live", [])
+
+    def mark_live_notified(self, mid):
+        rows = self._data.setdefault("notified_live", [])
+        if mid not in rows:
+            rows.append(mid)
+            self._data["notified_live"] = rows[-500:]
+            self.save()
+
+    def is_live_map_notified(self, mid, pos) -> bool:
+        maps = self._data.get("notified_live_maps") or {}
+        return pos in (maps.get(str(mid)) or [])
+
+    def mark_live_map_notified(self, mid, pos):
+        maps = self._data.setdefault("notified_live_maps", {})
+        key = str(mid)
+        rows = list(maps.get(key) or [])
+        if pos not in rows:
+            rows.append(pos)
+            maps[key] = rows[-20:]
+            self.save()
+
     def clear_match_notifications(self):
         self._data["notified_upcoming"] = []
         self._data["notified_finished"] = []
+        self._data["notified_live"] = []
+        self._data["notified_live_maps"] = {}
         self._data["delivery_receipts"] = {
             key: targets for key, targets in self._data["delivery_receipts"].items()
             if not key.startswith(("upcoming:", "finished:", "reschedule:"))
@@ -437,6 +464,8 @@ class DataStore:
         d.pop("source_tournament_snapshots", None)
         d.pop("notified_upcoming", None)
         d.pop("notified_finished", None)
+        d.pop("notified_live", None)
+        d.pop("notified_live_maps", None)
         d.pop("notified_tournaments", None)
         d.pop("match_schedules", None)
         d.pop("match_snapshots", None)

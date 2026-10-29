@@ -30,6 +30,7 @@ _ELEMENT = (
     ("center", "中间 VS / 比分", "对阵"),
     ("start_time", "开赛时间", "对阵"),
     ("timezone", "北京时间标注", "对阵"),
+    ("live_status", "进行中", "对阵"),
     ("round_marks", "各局胜负标记", "对阵"),
     ("player_stats", "选手数据总表", "正文"),
     ("left_players", "左侧选手 K-D / Rating", "正文"),
@@ -52,7 +53,7 @@ _ELEMENT = (
 )
 
 _BY_ID = {item[0]: item for item in _ELEMENT}
-_SKIP_KEYS = {"note", "badge", "elements", "width", "height", "customs"}
+_SKIP_KEYS = {"note", "badge", "elements", "width", "height", "customs", "overrides"}
 _BASE = ("kicker", "title", "extra_badge", "extra_note", "footer_brand", "footer_tag")
 
 CARD_TYPES = {
@@ -67,7 +68,16 @@ CARD_TYPES = {
         "label": "赛前提醒",
         "elements": _BASE + (
             "context", "left_logo", "right_logo", "left_name", "right_name",
-            "center", "start_time", "timezone",
+            "center", "start_time", "timezone", "live_status",
+        ),
+    },
+    "live": {
+        "label": "比赛",
+        "elements": _BASE + (
+            "context", "left_logo", "right_logo", "left_name", "right_name",
+            "center", "start_time", "timezone", "live_status",
+            "stage_meta", "series_score", "map_board", "player_stats",
+            "left_players", "right_players",
         ),
     },
     "result": {
@@ -101,6 +111,8 @@ def detect_card_type(title: str) -> str:
         return "reschedule"
     if "赛事开幕" in title or "参赛提醒" in title:
         return "tournament"
+    if "CS2 比赛" in title or title.strip() == "比赛":
+        return "live"
     return "reminder"
 
 
@@ -144,6 +156,7 @@ def default_card(kind: str) -> dict:
             for name in spec["elements"]
         },
         "customs": [],
+        "overrides": {},
     }
 
 
@@ -229,6 +242,17 @@ def validate_card_layout(value) -> dict:
             card["height"] = integer(incoming.get("height") or 0, f"card_layout.{kind}.height", MIN_HEIGHT, MAX_HEIGHT)
         if "customs" in incoming:
             card["customs"] = _customs(incoming.get("customs"), f"card_layout.{kind}.customs")
+        if "overrides" in incoming:
+            raw = incoming.get("overrides") or {}
+            if not isinstance(raw, dict):
+                raise ConfigError(f"card_layout.{kind}.overrides must be an object")
+            overrides = {}
+            for key, value in raw.items():
+                text = string(value or "", f"card_layout.{kind}.overrides.{key}")
+                if len(text) > NOTE_MAX:
+                    raise ConfigError(f"card_layout.{kind}.overrides.{key} is too long")
+                overrides[str(key)] = text
+            card["overrides"] = overrides
         elements = incoming.get("elements")
         if elements is None:
             elements = {key: item for key, item in incoming.items() if key not in _SKIP_KEYS}
@@ -308,6 +332,40 @@ def sample_notification(kind: str) -> dict:
                     {"name": "MOUZ", "players": [
                         {"name": "xertioN", "stats": {"counts": {"kills": 40, "deaths": 34}, "per_game_averages": {"adr": 84.0, "kast": 74.5, "hltv_game_rating": 1.18}}},
                         {"name": "siuhy", "stats": {"counts": {"kills": 28, "deaths": 38}, "per_game_averages": {"adr": 61.2, "kast": 69.1, "hltv_game_rating": 0.87}}},
+                    ]},
+                ]
+            },
+        }
+    if kind == "live":
+        return {
+            "text": "【CS2 比赛】\nPGL Masters",
+            "team_names": ["Vitality", "MOUZ"],
+            "center_text": "VS",
+            "start_time": "20:00",
+            "team_marks": teams[:2],
+            "live": True,
+            "match_detail": {
+                "name": "Semifinal",
+                "number_of_games": 3,
+                "tournament": {"name": "PGL Masters"},
+                "results": [{"team_id": 1, "score": 1}, {"team_id": 2, "score": 0}],
+                "opponents": [
+                    {"opponent": {"id": 1, "name": "Vitality"}},
+                    {"opponent": {"id": 2, "name": "MOUZ"}},
+                ],
+                "games": [
+                    {"position": 1, "status": "finished", "map": {"name": "Nuke"},
+                     "results": [{"team_id": 1, "score": 13}, {"team_id": 2, "score": 11}], "winner": {"id": 1}},
+                    {"position": 2, "status": "running", "map": {"name": "Dust2"}},
+                ],
+            },
+            "player_stats": {
+                "teams": [
+                    {"name": "Vitality", "players": [
+                        {"name": "ZywOo", "stats": {"counts": {"kills": 18, "deaths": 11}, "per_game_averages": {"adr": 92.1, "kast": 81.2, "hltv_game_rating": 1.39}}},
+                    ]},
+                    {"name": "MOUZ", "players": [
+                        {"name": "xertioN", "stats": {"counts": {"kills": 11, "deaths": 17}, "per_game_averages": {"adr": 64.0, "kast": 68.0, "hltv_game_rating": 0.88}}},
                     ]},
                 ]
             },

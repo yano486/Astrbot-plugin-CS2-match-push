@@ -208,6 +208,21 @@ def fmt_upcoming(match: dict, remind_min: int, custom_streams: list = None,
     return "\n".join(lines)
 
 
+def fmt_live_match(match: dict) -> str:
+    """HLTV 进行中的比赛快照。"""
+    t1 = team_name(match, 0)
+    t2 = team_name(match, 1)
+    lg = (match.get("league") or {}).get("name") or (match.get("tournament") or {}).get("name") or ""
+    bo = match.get("number_of_games") or 0
+    status = "进行中" if match.get("status") == "running" else "比赛"
+    return "\n".join([
+        "【CS2 比赛】",
+        lg,
+        f"{t1} vs {t2}",
+        f"BO{bo} · {status}" if bo else status,
+    ])
+
+
 def fmt_reschedule(match: dict, old_time: str, new_time: str) -> str:
     """赛程时间变更通知"""
     t1 = team_name(match, 0)

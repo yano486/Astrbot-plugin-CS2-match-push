@@ -39,7 +39,7 @@ from .formatters import (
     fmt_schedule,
     now_utc, now_cst, fmt_time, parse_dt,
     team_name, match_tier, sched_str, is_push_ready_match,
-    fmt_upcoming, fmt_reschedule, fmt_finished,
+    fmt_upcoming, fmt_reschedule, fmt_finished, fmt_live_match,
     fmt_tournament_announce, fmt_daily_schedule,
 )
 from .web_panel import WebPanel
@@ -1039,6 +1039,9 @@ class CSMatchPlugin(Star):
                 result = await self.client.get_match_result(match_id)
                 attempt += 1
                 self._result_meta[meta_key]["attempt"] = attempt
+                snapshot = result or tracked_match
+                if snapshot:
+                    await self._maybe_push_live_match(snapshot)
 
                 if result and result.get("status") == "finished":
                     if self.store.is_finished_notified(match_id):
@@ -1410,6 +1413,7 @@ class CSMatchPlugin(Star):
             layout=self.store.get("card_layout"),
             player_stats=(match or {}).get("_player_stats"),
             match_detail=match,
+            live=(match or {}).get("status") == "running",
         )
         _, _, Image = self._message_component_types()
         image = self._make_image_file_component(Image, path)
@@ -1550,6 +1554,59 @@ class CSMatchPlugin(Star):
         ]
         return match
 
+    def _hltv_enabled(self) -> bool:
+        return str(self.store.get("data_source_mode") or "pandascore") in {"hltv", "both"}
+
+    def _is_hltv_match(self, match: dict) -> bool:
+        mid = str((match or {}).get("id") or "")
+        sources = (match or {}).get("_sources") or []
+        return mid.startswith("hltv:") or (match or {}).get("_source") == "hltv" or "hltv" in sources
+
+    async def _push_live_match(self, match: dict, *, test_target: bool = False):
+        text = self._test_prefix(fmt_live_match(match)) if test_target else fmt_live_match(match)
+        return await self._push_notification(text, match=match, test_target=test_target)
+
+    async def _maybe_push_live_match(self, match: dict):
+        if not self._hltv_enabled() or not self._is_hltv_match(match):
+            return
+        mid = self._canonical_match_id(match.get("id"))
+        if match.get("status") == "running" and not self.store.is_live_notified(mid):
+            if await self._deliver_notification(f"live:{mid}", lambda: self._push_live_match(match)):
+                self.store.mark_live_notified(mid)
+                self.panel.push_log("OK", f"已推送比赛快照：{mid}")
+        for game in match.get("games") or []:
+            if game.get("status") != "finished":
+                continue
+            pos = game.get("position")
+            if pos is None or self.store.is_live_map_notified(mid, pos):
+                continue
+            if await self._deliver_notification(f"live-map:{mid}:{pos}", lambda: self._push_live_match(match)):
+                self.store.mark_live_map_notified(mid, pos)
+                self.panel.push_log("OK", f"已推送地图 {pos} 数据：{mid}")
+
+    async def _run_live_test_push(self) -> str:
+        if not self._hltv_enabled():
+            return "比赛推送仅在数据源为 HLTV 或双源时可用"
+        match = next((deepcopy(item) for item in self._scheduled if self._is_hltv_match(item)), None)
+        if match:
+            latest = await self.client.get_match_result(match.get("id"))
+            if latest:
+                match = latest
+        else:
+            match = self._build_test_match()
+            match["id"] = "hltv:99000001"
+            match["_source"] = "hltv"
+            match["_sources"] = ["hltv"]
+        match["status"] = match.get("status") or "running"
+        stats = await self.client.get_match_player_stats(match.get("id"))
+        if stats:
+            match["_player_stats"] = stats
+        games = await self.client.get_match_games(match.get("id"))
+        if games:
+            match["games"] = games
+        await self._push_live_match(match, test_target=True)
+        return "已发送测试比赛快照"
+
     def _build_test_tournament(self) -> dict:
         match = self._build_test_match()
         teams = []
@@ -1611,9 +1668,14 @@ class CSMatchPlugin(Star):
             await self._push_test(self._test_prefix(fmt_daily_schedule(matches, followed, days)),
                                   matches=self._daily_notice_matches(matches, days))
             return f"已发送测试日报（{days} 天）"
+        if action == "比赛":
+            return await self._run_live_test_push()
         if action == "全部":
             messages = []
-            for item in ("赛前", "赛果", "变更", "开幕", "日报"):
+            items = ["赛前", "赛果", "变更", "开幕", "日报"]
+            if self._hltv_enabled():
+                items.append("比赛")
+            for item in items:
                 messages.append(await self._run_test_push(item, days))
             return "；".join(messages)
         raise ValueError(f"unknown test action: {action}")
@@ -1838,6 +1900,7 @@ class CSMatchPlugin(Star):
                 "  /cs测试 变更          发送测试赛程变更\n"
                 "  /cs测试 开幕          发送测试赛事开幕通知\n"
                 "  /cs测试 日报 [天数]   发送测试日报\n"
+                "  /cs测试 比赛          发送 HLTV 进行中比赛快照\n"
                 "  /cs测试 全部          依次发送一套完整测试消息"
             )
 
@@ -1864,7 +1927,7 @@ class CSMatchPlugin(Star):
             except ValueError:
                 return event.plain_result("格式错误，示例：/cs测试 日报 2")
 
-        valid = {"赛前", "赛果", "变更", "开幕", "日报", "全部", "撤回", "回收"}
+        valid = {"赛前", "赛果", "变更", "开幕", "日报", "比赛", "全部", "撤回", "回收"}
         if action not in valid:
             return event.plain_result("未知测试动作，发送 /cs测试 查看帮助")
 

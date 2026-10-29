@@ -29,7 +29,7 @@ function parseCoord(value) {
 }
 
 function currentCard() {
-  layout[currentType] ||= { note: "", badge: "", width: 640, height: 0, elements: {}, customs: [] };
+  layout[currentType] ||= { note: "", badge: "", width: 640, height: 0, elements: {}, customs: [], overrides: {} };
   const card = layout[currentType];
   card.elements ||= {};
   card.customs ||= [];
@@ -118,6 +118,7 @@ function renderCustoms() {
 
 function readForm() {
   const spec = catalog[currentType];
+  const previous = currentCard();
   const card = {
     note: ($("#layout-note")?.value || "").trim(),
     badge: ($("#layout-badge")?.value || "").trim(),
@@ -125,6 +126,7 @@ function readForm() {
     height: parseCoord($("#layout-height")?.value) || 0,
     elements: {},
     customs: [],
+    overrides: { ...(previous.overrides || {}) },
   };
   if (spec) {
     for (const item of spec.elements) {
@@ -341,6 +343,23 @@ export function installCardLayout(client) {
     schedulePreview();
   });
   $("#layout-handles")?.addEventListener("pointerdown", startHandleDrag);
+  $("#layout-handles")?.addEventListener("dblclick", (event) => {
+    const handle = event.target.closest("[data-handle-id]");
+    if (!handle) return;
+    event.preventDefault();
+    const box = lastBoxes.find((item) => item.id === handle.dataset.handleId);
+    if (!box?.editable) {
+      setStatus("这项来自比赛数据，不能改。");
+      return;
+    }
+    const next = window.prompt("修改显示文本", box.label || "");
+    if (next == null) return;
+    readForm();
+    const card = currentCard();
+    card.overrides ||= {};
+    card.overrides[box.id] = next.trim();
+    schedulePreview();
+  });
   $("#layout-preview-image")?.addEventListener("click", (event) => {
     const image = event.currentTarget;
     if (!image.naturalWidth || !image.clientWidth) return;

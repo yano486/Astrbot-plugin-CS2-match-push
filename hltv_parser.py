@@ -333,6 +333,53 @@ def _score(node):
     return int(text) if re.fullmatch(r"[0-9]+", text) else None
 
 
+
+def _match_player_stats(root, teams):
+    rows = [{"name": team.get("name") or "?", "players": []} for team in teams[:2]]
+    if len(rows) < 2:
+        return {"teams": rows}
+    current = None
+    for table in (node for node in root.walk() if node.tag == "table"):
+        header = table.text().lower()
+        if "rating" not in header and "k-d" not in header.replace(" ", "") and "kd" not in header.replace("-", ""):
+            continue
+        for tr in (node for node in table.walk() if node.tag == "tr"):
+            cells = [_txt(child) for child in tr.children if isinstance(child, _Node) and child.tag in {"td", "th"}]
+            if not cells:
+                continue
+            label = cells[0]
+            matched = next((item for item in rows if item["name"] and item["name"] in label), None)
+            if matched and len(cells) < 4:
+                current = matched
+                continue
+            kd = next((cell for cell in cells if re.fullmatch(r"\d+\s*-\s*\d+", cell.replace(" ", ""))), None)
+            if not kd or current is None:
+                continue
+            if re.search(r"player|k-d|rating", label, re.I):
+                continue
+            kills, deaths = re.split(r"\s*-\s*", kd.replace(" ", ""), 1)
+            rating = None
+            adr = None
+            kast = None
+            numbers = []
+            for cell in cells[1:]:
+                if re.fullmatch(r"\d+\.\d+", cell):
+                    numbers.append(float(cell))
+                elif re.fullmatch(r"\d+(?:\.\d+)?%", cell):
+                    kast = float(cell.rstrip("%"))
+            if numbers:
+                rating = numbers[-1]
+                if len(numbers) > 1:
+                    adr = numbers[0]
+            current["players"].append({
+                "name": label,
+                "stats": {
+                    "counts": {"kills": int(kills), "deaths": int(deaths)},
+                    "per_game_averages": {"hltv_game_rating": rating, "adr": adr, "kast": kast},
+                },
+            })
+    return {"teams": rows}
+
 def parse_match(html: str, url: str) -> dict:
     root = _tree(html)
     mid = _path_id(url, "matches")
@@ -391,7 +438,7 @@ def parse_match(html: str, url: str) -> dict:
         team = teams[0 if scores[0] > scores[1] else 1]
         if team["id"]:
             winner = {"id": team["id"], "name": team["name"]}
-    return {"id": mid, "name": veto.split("*", 1)[1].strip() if "*" in veto else "",
+    record = {"id": mid, "name": veto.split("*", 1)[1].strip() if "*" in veto else "",
             "status": status, "scheduled_at": _iso(stamp), "begin_at": None,
             "number_of_games": best_of, "opponents": [{"opponent": t, "type": "Team"} for t in teams],
             "league": dict(event), "tournament": event, "winner": winner, "games": games,
@@ -399,3 +446,5 @@ def parse_match(html: str, url: str) -> dict:
             "draw": status == "finished" and scores[0] is not None and scores[0] == scores[1],
             "forfeit": "forfeit" in countdown or "walkover" in countdown,
             "streams_list": [], **_source(url), "_stars": _stars(root)}
+    record["_player_stats"] = _match_player_stats(root, teams)
+    return record

@@ -19,6 +19,7 @@ class BannerRenderer:
     def _record_box(self, name, x, y, w=72, h=22, label=""):
         if not name or name in self._layout_boxes:
             return
+        editable = name in {"kicker", "title", "extra_badge", "extra_note", "footer_brand", "footer_tag"} or str(name).startswith("custom_")
         self._layout_boxes[name] = {
             "id": name,
             "x": int(x),
@@ -26,6 +27,7 @@ class BannerRenderer:
             "w": int(max(24, w)),
             "h": int(max(16, h)),
             "label": label or name,
+            "editable": editable,
         }
 
     def _layout_xy(self, spec, name, default_x, default_y, w=72, h=22, label=""):
@@ -55,6 +57,7 @@ class BannerRenderer:
             layout=saved,
             player_stats=sample.get("player_stats"),
             match_detail=sample.get("match_detail"),
+            live=bool(sample.get("live")),
         )
 
     def render_notification(
@@ -73,6 +76,7 @@ class BannerRenderer:
         layout=None,
         player_stats=None,
         match_detail=None,
+        live: bool = False,
     ) -> str:
         """Render one compact editorial card; delivery failures propagate.
 
@@ -106,6 +110,9 @@ class BannerRenderer:
         from .card_layout import resolve_card_layout
         layout_spec = resolve_card_layout(layout, title)
         self._layout_boxes = {}
+        overrides = layout_spec.get("overrides") or {}
+        if overrides.get("title"):
+            title = self._notification_text(overrides.get("title"))
         is_result = has_matchup and "赛事结果" in title
         if is_result and winner_index is None:
             scores = re.fullmatch(r"\s*(\d+)\s*:\s*(\d+)\s*", str(center_text))
@@ -200,7 +207,7 @@ class BannerRenderer:
             score_font = self._fit_banner_font(measure, clean_score, 144, 49 if is_result else 27, 16)
             score_rows = self._wrap_notification_text(measure, clean_score, score_font, 144)
             score_height = 32 * len(score_rows)
-            match_height = max(115 + 25 * max(map(len, name_rows)), 30 + score_height + (68 if display_time else 0))
+            match_height = max(115 + 25 * max(map(len, name_rows)), 30 + score_height + (68 if display_time else 0) + (20 if live else 0))
             if is_result and game_outcomes:
                 match_height += 30
             matchup = (cursor, match_height, name_rows, name_font, score_rows, score_font)
@@ -281,22 +288,25 @@ class BannerRenderer:
         detail = match_detail if isinstance(match_detail, dict) else {}
         stat_teams = self._normalize_player_stats(player_stats)
         maps = self._map_items(detail)
+        if layout_spec.get("type") == "live":
+            maps = [item for item in maps if item.get("finished")]
         series = self._series_line(detail, names)
         stage = self._stage_line(detail)
+        detail_ok = layout_spec.get("type") in {"result", "live"}
         extras_h = 0
-        if show("stage_meta") and stage:
+        if detail_ok and show("stage_meta") and stage:
             extras_h += 26
-        if show("series_score") and series:
+        if detail_ok and show("series_score") and series:
             extras_h += 28
-        if show("map_board") and maps:
+        if detail_ok and show("map_board") and maps:
             extras_h += 8 + 20 * len(maps)
         side_h = 0
-        if show("left_players") and stat_teams:
+        if detail_ok and show("left_players") and stat_teams:
             side_h = max(side_h, 24 + 20 * len(stat_teams[0]["players"]))
-        if show("right_players") and len(stat_teams) > 1:
+        if detail_ok and show("right_players") and len(stat_teams) > 1:
             side_h = max(side_h, 24 + 20 * len(stat_teams[1]["players"]))
         extras_h += side_h
-        if show("player_stats") and stat_teams:
+        if detail_ok and show("player_stats") and stat_teams:
             extras_h += self._player_stats_height(stat_teams)
         footer_on = show("footer_brand") or show("footer_tag")
         height = cursor + extras_h + sum(item[1] if isinstance(item, tuple) else item.get("height", 27) for item in wrapped) + (55 if footer_on else 16)
@@ -309,20 +319,21 @@ class BannerRenderer:
         if header_on:
             draw.rectangle((0, 0, width, header_height), fill="#132033")
             draw.rectangle((0, 0, 8, header_height), fill="#ff6848")
+        kicker = self._notification_text(str(overrides.get("kicker") or "CS2"))
         if show("kicker"):
-            x, y = self._layout_xy(layout_spec, "kicker", padding, 23)
-            self._draw_card_text(draw, "CS2", x, y, self._pick_banner_font(16), "#ff8a70")
-        badge = str(layout_spec.get("badge") or "").strip()
+            x, y = self._layout_xy(layout_spec, "kicker", padding, 23, 48, 20, kicker)
+            self._draw_card_text(draw, kicker, x, y, self._pick_banner_font(16), "#ff8a70")
+        badge = str(overrides.get("extra_badge") or layout_spec.get("badge") or "").strip()
         if badge and show("extra_badge"):
             x, y = self._layout_xy(layout_spec, "extra_badge", width - padding - 110, 18)
             self._draw_card_text(draw, badge, x, y, label_font, "#ff8a70")
         if test_mode:
             self._draw_card_text(draw, "测试推送", width - padding - 48, 18, label_font, "#ff8a70")
         for index, row in enumerate(title_draw_rows):
-            x, y = self._layout_xy(layout_spec, "title", padding, title_y + index * 29)
+            x, y = self._layout_xy(layout_spec, "title", padding, title_y + index * 29, 240, 28, row)
             self._draw_card_text(draw, row, x, y, title_font, "#ffffff")
         for index, row in enumerate(context_draw_rows):
-            x, y = self._layout_xy(layout_spec, "context", width - padding - 236, 35 + index * 22)
+            x, y = self._layout_xy(layout_spec, "context", width - padding - 236, 35 + index * 22, 200, 22, row)
             self._draw_card_text(draw, row, x, y, detail_font, "#dce5f0")
         if matchup:
             top, match_height, name_rows, name_font, score_rows, score_font = matchup
@@ -374,10 +385,13 @@ class BannerRenderer:
                     x, y = self._layout_xy(layout_spec, "start_time", width // 2, time_y)
                     self._draw_card_text(draw, shown_time, x, y, time_font, ink, centered=True, bold=not bool(time_transition))
                 if show("timezone"):
-                    x, y = self._layout_xy(layout_spec, "timezone", width // 2, time_y + 45)
+                    x, y = self._layout_xy(layout_spec, "timezone", width // 2, time_y + 45, 72, 16, "北京时间")
                     self._draw_card_text(draw, "北京时间", x, y, label_font, gold, centered=True)
+                if live and show("live_status"):
+                    x, y = self._layout_xy(layout_spec, "live_status", width // 2, time_y + 64, 64, 18, "进行中")
+                    self._draw_card_text(draw, "进行中", x, y, label_font, "#d64545", centered=True)
         flow = cursor
-        if show("stage_meta") and stage:
+        if detail_ok and show("stage_meta") and stage:
             x, y = self._layout_xy(layout_spec, "stage_meta", padding, flow)
             h = self._draw_stage_meta(draw, stage, x, y, detail_font, muted)
             if ((layout_spec.get("elements") or {}).get("stage_meta") or {}).get("y") is None:
@@ -398,7 +412,7 @@ class BannerRenderer:
         if show("right_players") and len(stat_teams) > 1:
             x, y = self._layout_xy(layout_spec, "right_players", width // 2 + 8, flow, 240, 80, "右选手")
             self._draw_player_column(draw, stat_teams[1], x, y, 240, detail_font, label_font, ink, muted, gold)
-        if (show("left_players") or show("right_players")) and stat_teams:
+        if detail_ok and (show("left_players") or show("right_players")) and stat_teams:
             col_h = side_h or 80
             left_auto = ((layout_spec.get("elements") or {}).get("left_players") or {}).get("y") is None
             right_auto = ((layout_spec.get("elements") or {}).get("right_players") or {}).get("y") is None
@@ -463,10 +477,14 @@ class BannerRenderer:
             draw.rectangle((0, height - 50, width, height), fill="#e5ebf2")
             if show("footer_brand"):
                 x, y = self._layout_xy(layout_spec, "footer_brand", padding, height - 30)
-                self._draw_card_text(draw, "CS2 比赛推送", x, y, label_font, muted)
+                brand = self._notification_text(str(overrides.get("footer_brand") or "CS2 比赛推送"))
+                self._draw_card_text(draw, brand, x, y, label_font, muted)
+                self._record_box("footer_brand", x, y, 120, 16, brand)
             if show("footer_tag"):
                 x, y = self._layout_xy(layout_spec, "footer_tag", width - padding - 72, height - 30)
-                self._draw_card_text(draw, "比赛已结束" if is_result else "赛事资讯", x, y, label_font, muted)
+                tag = self._notification_text(str(overrides.get("footer_tag") or ("比赛已结束" if is_result else "赛事资讯")))
+                self._draw_card_text(draw, tag, x, y, label_font, muted)
+                self._record_box("footer_tag", x, y, 80, 16, tag)
         for item in customs:
             x = int(item["x"] if item.get("x") is not None else padding)
             y = int(item["y"] if item.get("y") is not None else height - 80)
